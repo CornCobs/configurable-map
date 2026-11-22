@@ -8,6 +8,7 @@ import type { ArcgisMapCustomEvent } from "@arcgis/map-components";
 import type { ArcgisFeatureTable } from "@arcgis/map-components/components/arcgis-feature-table";
 import { Configuration, configure, configureSymbols } from "./configuration";
 import { applySymbologyDraft, MAX_MARKER_SIZE, MIN_MARKER_SIZE, type SymbologyDraft } from "./symbology";
+import LeftRail from "./components/LeftRail";
 
 // This is a REST API - you can open this url on the browser to see the available fields in the layer
 const FEATURE_LAYER_URL =
@@ -32,6 +33,8 @@ const INITIAL_DRAFT: SymbologyDraft = {
 };
 
 export default function App() {
+  // Future: Connect this selection to the attribute settings drawer.
+  const [attributeSettingsSelected, setAttributeSettingsSelected] = useState(false);
   const [layer, setLayer] = useState<FeatureLayer | null>(null);
   const layerRef = useRef<FeatureLayer | null>(null);
   const initializedTable = useRef<ArcgisFeatureTable | null>(null);
@@ -115,14 +118,12 @@ export default function App() {
   }, []);
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100vh",
-        width: "100vw",
-      }}
-    >
+    <div className="app-shell">
+      <LeftRail
+        attributeSettingsSelected={attributeSettingsSelected}
+        onToggleAttributeSettings={() => setAttributeSettingsSelected(selected => !selected)}
+      />
+      <div className="map-workspace">
       <form className="symbology-panel" noValidate onSubmit={event => { event.preventDefault(); apply(); }}>
         <fieldset>
           <legend>Point colour · Leaf area</legend>
@@ -160,6 +161,7 @@ export default function App() {
           style={{ height: "40vh" }}
         />
       )}
+      </div>
     </div>
   );
 }
