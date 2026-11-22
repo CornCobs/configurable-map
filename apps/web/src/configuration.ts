@@ -20,13 +20,10 @@ export type Configuration = {
   };
 };
 
-export const configure = (
+export const configureSymbols = (
   layer: FeatureLayer,
-  table: HTMLArcgisFeatureTableElement,
-  config: Configuration,
+  symbolConfig: Configuration["symbolConfig"],
 ) => {
-  const { symbolConfig, tableConfig } = config;
-
   const visualVariables: Array<
     (SizeVariableProperties & { type: "size" }) | (ColorVariableProperties & { type: "color" })
   > = [];
@@ -59,6 +56,15 @@ export const configure = (
     visualVariables
   });
   layer.renderer = renderer;
+};
+
+export const configure = (
+  layer: FeatureLayer,
+  table: HTMLArcgisFeatureTableElement,
+  config: Configuration,
+) => {
+  configureSymbols(layer, config.symbolConfig);
+  const { tableConfig } = config;
 
   table.tableTemplate = new TableTemplate({
     columnTemplates: tableConfig.columns.map(

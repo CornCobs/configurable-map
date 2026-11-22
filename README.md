@@ -1,25 +1,51 @@
 # Configurable Trees
 
-To run the app from the repository root:
+## Solution overview
+
+A React map of the [Landscape Trees dataset](https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0). Users edit point colour and size, then select **Apply**. Invalid edits show an error and leave the previous settings applied. Apply is disabled while tree data loads; load failures show an error.
+
+## Architecture explanation
+
+The React/TypeScript frontend is in `apps/web`. ArcGIS components display the map, legend and table using hosted tree data. `App.tsx` holds draft/applied state, `symbology.ts` validates it, and `configuration.ts` updates the renderer separately from table setup.
+
+Future: Add backend/storage details and the system architecture diagram when implemented.
+
+## Local setup instructions
+
+Use Node.js 24 (tested with 24.16.0) and pnpm. From the repository root:
 
 ```sh
-> cd apps/web
-> pnpm install
-> pnpm run dev
+cd apps/web
+pnpm install
+pnpm run dev
 ```
 
-This is a simple web mapping application that visualizes the open Landscape Trees data available on ArcGIS Online's Living Atlas (https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0).
+Open the URL printed by Vite. ArcGIS needs internet access.
 
-You can visit the link above to explore the feature service and its fields.
+From `apps/web`: `pnpm test` runs helper and App integration tests; `pnpm run build` builds the app; `pnpm run preview` previews the build.
 
-A function to configure the attribute table and visualization from a fixed data format has been provided in `apps/web/src/configuration.ts`, along with the schema. A sample usage is found in `apps/web/src/App.tsx`.
+## API documentation or a link to it
 
-The map is rendered using the [ArcGIS Maps SDK for Javascript](https://developers.arcgis.com/javascript/latest/), using the `@arcgis/core` and `@arcgis/map-components` web components.
+Tree data comes from the [ArcGIS feature service](https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0).
 
-## Symbology validation
+Future: Link the application backend API documentation when implemented.
 
-The symbology helper validates six-digit hex colours and finite marker sizes from 1–100 points, including reversed size ramps. Unit tests cover invalid input and preserving applied settings on failure. This step does not connect the helper to the App controls.
+## Assumptions and trade-offs
 
-Run `npm test` from `apps/web` using Node.js 24.
+- Local React state keeps the current draft/Apply workflow small.
+- Colour uses Leaf_Area at 10/40,000; size uses Leaf_Bmass at 0/700. Fields and data ranges remain fixed.
+- I chose a size range of 1–100 points for readability. Reversed size ramps are allowed.
 
-Future: Connect the helper to colour/size controls and an Apply action.
+## Known limitations
+
+Apply does not save; reload restores the starter default. Field selection, configurable attribute display, saved custom configurations and sharing are not implemented.
+
+Not verified: live-map acceptance and responsive/accessibility checks.
+
+## Further improvements
+
+Future: Support metadata-driven field selection, editable data ranges and final UI polish. Complete required configuration and sharing workflows before optional extensions.
+
+## AI usage disclosure
+
+AI assisted with implementation, tests and documentation. Future: Attach a separate disclosure with contributions, decisions and verification.
