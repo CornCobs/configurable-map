@@ -4,6 +4,8 @@
 
 A React map of the [Landscape Trees dataset](https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0). Users edit point colour and size, then select **Apply**. Invalid edits show an error and leave the previous settings applied. Apply is disabled while tree data loads; load failures show an error.
 
+The table currently previews all dataset fields; scroll horizontally to inspect them before the attribute settings UI is added.
+
 ## Architecture explanation
 
 The React/TypeScript frontend is in `apps/web`. ArcGIS components display the map, legend and table using hosted tree data. `App.tsx` holds draft/applied state, `symbology.ts` validates it, and `configuration.ts` updates the renderer separately from table setup.

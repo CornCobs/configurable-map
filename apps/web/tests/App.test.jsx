@@ -10,6 +10,7 @@ const sdk = vi.hoisted(() => {
   }
   class Layer extends Value {
     objectIdField = "OBJECTID";
+    fields = ["Tree_ID", "Cmn_Name", "Leaf_Area", "Leaf_Bmass"].map(name => ({ name }));
     fullExtent = { xmin: 0, ymin: 0, xmax: 1, ymax: 1 };
     when = vi.fn((loaded, failed) => { this.loaded = loaded; this.failed = failed; });
     constructor(properties) { super(properties); layers.push(this); }
@@ -74,7 +75,7 @@ test("real edits and Apply update the renderer; later edits preserve applied set
   fireEvent.change(screen.getByLabelText("At 0 (pt)"), { target: { value: "30" } });
   expect(layer.renderer).toBe(appliedRenderer);
   expect(table.tableTemplate).toBe(tableTemplate);
-  expect(table.tableTemplate.columnTemplates.map(column => column.fieldName)).toEqual(["Leaf_Bmass", "Leaf_Area"]);
+  expect(table.tableTemplate.columnTemplates.map(column => column.fieldName)).toEqual(["Leaf_Bmass", "Leaf_Area", "Cmn_Name", "Tree_ID"]);
   expect(table.hiddenFields).toBe(hiddenFields);
   fireEvent.click(apply);
   expect(sizeStops(layer).map(stop => stop.size)).toEqual([30, 60]);

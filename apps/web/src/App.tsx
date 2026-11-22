@@ -50,7 +50,12 @@ export default function App() {
       return;
     }
     if (initializedTable.current !== table) {
-      configure(layer, table, CONFIG);
+      // Preview all dataset attributes before choosing the table settings UI.
+      // Future: Use the user's selected column names and order here.
+      configure(layer, table, {
+        ...CONFIG,
+        tableConfig: { columns: layer.fields.map(field => field.name) },
+      });
       initializedTable.current = table;
     }
     setReady(true);
