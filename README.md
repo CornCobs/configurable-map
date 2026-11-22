@@ -1,8 +1,9 @@
 # Configurable Trees
 
-To run the app:
+To run the app from the repository root:
 
 ```sh
+> cd apps/web
 > pnpm install
 > pnpm run dev
 ```
@@ -11,6 +12,6 @@ This is a simple web mapping application that visualizes the open Landscape Tree
 
 You can visit the link above to explore the feature service and its fields.
 
-A function to configure the attribute table and visualization from a fixed data format has been provided in `configuration.ts`, along with the schema. A sample usage is found in `App.tsx`.
+A function to configure the attribute table and visualization from a fixed data format has been provided in `apps/web/src/configuration.ts`, along with the schema. A sample usage is found in `apps/web/src/App.tsx`.
 
 The map is rendered using the [ArcGIS Maps SDK for Javascript](https://developers.arcgis.com/javascript/latest/), using the `@arcgis/core` and `@arcgis/map-components` web components.
