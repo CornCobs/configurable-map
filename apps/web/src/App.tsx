@@ -6,9 +6,10 @@ import "@arcgis/map-components/components/arcgis-feature-table";
 import "@arcgis/map-components/components/arcgis-expand";
 import type { ArcgisMapCustomEvent } from "@arcgis/map-components";
 import type { ArcgisFeatureTable } from "@arcgis/map-components/components/arcgis-feature-table";
-import { Configuration, configure, configureSymbols } from "./configuration";
+import { Configuration, configure, configureSymbols, configureTable } from "./configuration";
 import { applySymbologyDraft, MAX_MARKER_SIZE, MIN_MARKER_SIZE, type SymbologyDraft } from "./symbology";
 import LeftRail from "./components/LeftRail";
+import AttributeSettingsDrawer from "./components/AttributeSettingsDrawer";
 
 // This is a REST API - you can open this url on the browser to see the available fields in the layer
 const FEATURE_LAYER_URL =
@@ -33,8 +34,8 @@ const INITIAL_DRAFT: SymbologyDraft = {
 };
 
 export default function App() {
-  // Future: Connect this selection to the attribute settings drawer.
-  const [attributeSettingsSelected, setAttributeSettingsSelected] = useState(false);
+  const [isAttributeDrawerOpen, setIsAttributeDrawerOpen] = useState(false);
+  const [draftColumnNames, setDraftColumnNames] = useState<string[]>([]);
   const [layer, setLayer] = useState<FeatureLayer | null>(null);
   const layerRef = useRef<FeatureLayer | null>(null);
   const initializedTable = useRef<ArcgisFeatureTable | null>(null);
@@ -53,8 +54,7 @@ export default function App() {
       return;
     }
     if (initializedTable.current !== table) {
-      // Preview all dataset attributes before choosing the table settings UI.
-      // Future: Use the user's selected column names and order here.
+      // Initially show all columns. Applying table settings later leaves map symbology unchanged.
       configure(layer, table, {
         ...CONFIG,
         tableConfig: { columns: layer.fields.map(field => field.name) },
@@ -64,9 +64,11 @@ export default function App() {
     setReady(true);
   }, [layer]);
 
-  const edit = (field: keyof SymbologyDraft, value: string) => {
-    setDraft(current => ({ ...current, [field]: value }));
-    setError(null);
+  const applyTableSettings = () => {
+    if (!isTableInitialized || !layer || !initializedTable.current || draftColumnNames.length === 0) return;
+    configureTable(layer, initializedTable.current, { columns: draftColumnNames });
+    setIsAttributeDrawerOpen(false);
+  };
   };
 
   // Future: Save should persist a validated Configuration through the API;
@@ -111,6 +113,7 @@ export default function App() {
     layer.when(
       () => {
         if (layer.fullExtent) view.goTo(layer.fullExtent).catch(() => {});
+        setDraftColumnNames(layer.fields.map(field => field.name));
         setLayer(layer);
       },
       () => setLoadError("Could not load tree data. Check your connection and reload the page."),
@@ -120,8 +123,17 @@ export default function App() {
   return (
     <div className="app-shell">
       <LeftRail
-        attributeSettingsSelected={attributeSettingsSelected}
-        onToggleAttributeSettings={() => setAttributeSettingsSelected(selected => !selected)}
+        isAttributeDrawerOpen={isAttributeDrawerOpen}
+        onToggleAttributeDrawer={() => setIsAttributeDrawerOpen(selected => !selected)}
+      />
+      <AttributeSettingsDrawer
+        isAttributeDrawerOpen={isAttributeDrawerOpen}
+        fields={layer?.fields ?? []}
+        columns={draftColumnNames}
+        isTableInitialized={isTableInitialized}
+        layerLoadError={layerLoadError}
+        onChange={setDraftColumnNames}
+        onApply={applyTableSettings}
       />
       <div className="map-workspace">
       <form className="symbology-panel" noValidate onSubmit={event => { event.preventDefault(); apply(); }}>
@@ -149,7 +161,8 @@ export default function App() {
         onarcgisViewReadyChange={handleReady}
         style={{ flex: 1, minHeight: 0 }}
       >
-        <arcgis-expand slot="bottom-left" expanded>
+        {/* Keep the legend in workspace stacking rather than the browser's top layer. */}
+        <arcgis-expand slot="bottom-left" expanded topLayerDisabled>
           <arcgis-legend />
         </arcgis-expand>
       </arcgis-map>

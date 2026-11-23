@@ -110,6 +110,12 @@ test("invalid input keeps the last renderer and can be corrected through the act
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
+// Future: Test that drawer visibility/order edits leave the table unchanged until Apply.
+// Future: Test chip-name hiding and grip reordering by drag and Alt + Left/Right.
+// Future: Test that Apply updates columns and closes the drawer; rail close/reopen retains unapplied edits.
+// Future: Test that an empty selection blocks Apply until a column is selected.
+// Future: Test that docking preserves map/table state and pending edits.
+
 test("failed tree loading shows an error and leaves Apply disabled", () => {
   const { layer } = mountApp();
   act(() => layer.failed(new Error("offline")));

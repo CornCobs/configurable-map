@@ -4,11 +4,11 @@
 
 A React map of the [Landscape Trees dataset](https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0). Users edit point colour and size, then select **Apply**. Invalid edits show an error and leave the previous settings applied. Apply is disabled while tree data loads; load failures show an error.
 
-The table currently previews all dataset fields; scroll horizontally to inspect them before the attribute settings UI is added.
+The table starts with all dataset fields. Open **Table** in the left rail to edit compact column chips. Click a selected name to hide it; search hidden columns and click to add. Drag a grip to reorder, or focus it and press Alt + Left/Right. **Apply table settings** updates the table and closes the drawer. Closing through **Table** keeps the draft without applying it; at least one column must remain selected.
 
 ## Architecture explanation
 
-The React/TypeScript frontend is in `apps/web`. ArcGIS components display the map, legend and table using hosted tree data. `App.tsx` holds draft/applied state, `symbology.ts` validates it, and `configuration.ts` updates the renderer separately from table setup.
+The React/TypeScript frontend is in `apps/web`. ArcGIS components display the map, legend and table using hosted tree data. `App.tsx` holds draft/applied state, `symbology.ts` validates symbols, and `configuration.ts` updates the renderer and table separately. Components under `src/components` provide the left rail and attribute drawer.
 
 Future: Add backend/storage details and the system architecture diagram when implemented.
 
@@ -40,11 +40,13 @@ Future: Link the application backend API documentation when implemented.
 
 ## Known limitations
 
-Apply does not save; reload restores the starter default. Field selection, configurable attribute display, saved custom configurations and sharing are not implemented.
+Apply does not save; reload restores the initial settings. Symbology field selection, saved custom configurations and sharing are not implemented. The desktop drawer overlays part of the workspace while open.
 
 Not verified: live-map acceptance and responsive/accessibility checks.
 
 ## Further improvements
+
+Future: Dock the drawer so the map/table workspace narrows and the uncovered table remains horizontally scrollable. Adapt the layout for mobile and replace drawer icon glyphs with Font Awesome or an approved icon set while preserving accessible labels.
 
 Future: Support metadata-driven field selection, editable data ranges and final UI polish. Complete required configuration and sharing workflows before optional extensions.
 

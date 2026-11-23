@@ -10,8 +10,20 @@ body,
 }
 
 /* Future: Adapt the rail and workspace layout for mobile screens. */
-.app-shell { display: flex; height: 100vh; width: 100vw; }
-.map-workspace { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.app-shell { 
+  position: relative; 
+  display: flex; 
+  height: 100vh; 
+  width: 100vw; 
+}
+/* Keep ArcGIS overlays inside the workspace below the attribute drawer. */
+.map-workspace { 
+  z-index: 0; 
+  display: flex; 
+  flex: 1; 
+  flex-direction: 
+  column; min-width: 0; 
+}
 .symbology-panel {
   display: flex;
   flex-wrap: wrap;
