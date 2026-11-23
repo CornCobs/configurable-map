@@ -39,18 +39,18 @@ export default function App() {
   const [layer, setLayer] = useState<FeatureLayer | null>(null);
   const layerRef = useRef<FeatureLayer | null>(null);
   const initializedTable = useRef<ArcgisFeatureTable | null>(null);
-  const [ready, setReady] = useState(false);
-  const [draft, setDraft] = useState(INITIAL_DRAFT);
-  const [appliedDraft, setAppliedDraft] = useState(INITIAL_DRAFT);
-  const [hasApplied, setHasApplied] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const changed = (Object.keys(draft) as (keyof SymbologyDraft)[])
-    .some(key => draft[key] !== appliedDraft[key]);
+  const [isTableInitialized, setIsTableInitialized] = useState(false);
+  const [symbologyDraft, setSymbologyDraft] = useState(INITIAL_DRAFT);
+  const [appliedSymbologyDraft, setAppliedSymbologyDraft] = useState(INITIAL_DRAFT);
+  const [hasAppliedSymbology, setHasAppliedSymbology] = useState(false);
+  const [symbologyError, setSymbologyError] = useState<string | null>(null);
+  const [layerLoadError, setLayerLoadError] = useState<string | null>(null);
+  const hasSymbologyChanges = (Object.keys(symbologyDraft) as (keyof SymbologyDraft)[])
+    .some(key => symbologyDraft[key] !== appliedSymbologyDraft[key]);
 
   const handleTableRef = useCallback((table: ArcgisFeatureTable | null) => {
     if (!table || !layer) {
-      setReady(false);
+      setIsTableInitialized(false);
       return;
     }
     if (initializedTable.current !== table) {
@@ -61,7 +61,7 @@ export default function App() {
       });
       initializedTable.current = table;
     }
-    setReady(true);
+    setIsTableInitialized(true);
   }, [layer]);
 
   const applyTableSettings = () => {
@@ -69,21 +69,25 @@ export default function App() {
     configureTable(layer, initializedTable.current, { columns: draftColumnNames });
     setIsAttributeDrawerOpen(false);
   };
+
+  const updateSymbologyDraft = (field: keyof SymbologyDraft, value: string) => {
+    setSymbologyDraft(current => ({ ...current, [field]: value }));
+    setSymbologyError(null);
   };
 
   // Future: Save should persist a validated Configuration through the API;
   // keep Apply as a map-only operation so editing never overwrites a saved record.
-  const apply = () => {
-    if (!ready || !layer) return;
-    const result = applySymbologyDraft(draft, appliedDraft, symbols => configureSymbols(layer, symbols));
-    setError(result.error);
+  const applySymbology = () => {
+    if (!isTableInitialized || !layer) return;
+    const result = applySymbologyDraft(symbologyDraft, appliedSymbologyDraft, symbols => configureSymbols(layer, symbols));
+    setSymbologyError(result.error);
     if (!result.error) {
-      setAppliedDraft(result.appliedDraft);
-      setHasApplied(true);
+      setAppliedSymbologyDraft(result.appliedDraft);
+      setHasAppliedSymbology(true);
     }
   };
 
-  const handleReady = useCallback((event: ArcgisMapCustomEvent<void>) => {
+  const handleMapReady = useCallback((event: ArcgisMapCustomEvent<void>) => {
     const view = event.target.view;
     if (!view?.map || layerRef.current) return;
 
@@ -116,7 +120,7 @@ export default function App() {
         setDraftColumnNames(layer.fields.map(field => field.name));
         setLayer(layer);
       },
-      () => setLoadError("Could not load tree data. Check your connection and reload the page."),
+      () => setLayerLoadError("Could not load tree data. Check your connection and reload the page."),
     );
   }, []);
 
@@ -136,29 +140,29 @@ export default function App() {
         onApply={applyTableSettings}
       />
       <div className="map-workspace">
-      <form className="symbology-panel" noValidate onSubmit={event => { event.preventDefault(); apply(); }}>
+      <form className="symbology-panel" noValidate onSubmit={event => { event.preventDefault(); applySymbology(); }}>
         <fieldset>
           <legend>Point colour · Leaf area</legend>
-          <label>At 10 <input type="color" value={draft.lowColor} onChange={event => edit("lowColor", event.target.value)} /></label>
-          <label>At 40,000 <input type="color" value={draft.highColor} onChange={event => edit("highColor", event.target.value)} /></label>
+          <label>At 10 <input type="color" value={symbologyDraft.lowColor} onChange={event => updateSymbologyDraft("lowColor", event.target.value)} /></label>
+          <label>At 40,000 <input type="color" value={symbologyDraft.highColor} onChange={event => updateSymbologyDraft("highColor", event.target.value)} /></label>
         </fieldset>
         <fieldset>
           <legend>Point size · Leaf biomass</legend>
-          <label>At 0 (pt) <input type="number" min={MIN_MARKER_SIZE} max={MAX_MARKER_SIZE} step="any" value={draft.lowSize} onChange={event => edit("lowSize", event.target.value)} /></label>
-          <label>At 700 (pt) <input type="number" min={MIN_MARKER_SIZE} max={MAX_MARKER_SIZE} step="any" value={draft.highSize} onChange={event => edit("highSize", event.target.value)} /></label>
+          <label>At 0 (pt) <input type="number" min={MIN_MARKER_SIZE} max={MAX_MARKER_SIZE} step="any" value={symbologyDraft.lowSize} onChange={event => updateSymbologyDraft("lowSize", event.target.value)} /></label>
+          <label>At 700 (pt) <input type="number" min={MIN_MARKER_SIZE} max={MAX_MARKER_SIZE} step="any" value={symbologyDraft.highSize} onChange={event => updateSymbologyDraft("highSize", event.target.value)} /></label>
           <small>1–100 points; either direction allowed.</small>
         </fieldset>
         <div className="symbology-actions">
-          <button type="submit" disabled={!ready}>Apply</button>
-          <span role="status">{loadError ? "Map unavailable" : !ready ? "Loading map…" : changed ? "Changes not applied" : hasApplied ? "Applied — not saved" : "Default applied"}</span>
-          {loadError && <span role="alert">{loadError}</span>}
-          {error && <span role="alert">{error}</span>}
+          <button type="submit" disabled={!isTableInitialized}>Apply</button>
+          <span role="status">{layerLoadError ? "Map unavailable" : !isTableInitialized ? "Loading map…" : hasSymbologyChanges ? "Changes not applied" : hasAppliedSymbology ? "Applied — not saved" : "Default applied"}</span>
+          {layerLoadError && <span role="alert">{layerLoadError}</span>}
+          {symbologyError && <span role="alert">{symbologyError}</span>}
         </div>
       </form>
       <arcgis-map
         id="map"
         basemap="topo-vector"
-        onarcgisViewReadyChange={handleReady}
+        onarcgisViewReadyChange={handleMapReady}
         style={{ flex: 1, minHeight: 0 }}
       >
         {/* Keep the legend in workspace stacking rather than the browser's top layer. */}
