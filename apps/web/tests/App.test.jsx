@@ -32,12 +32,13 @@ vi.mock("@arcgis/map-components/components/arcgis-expand", () => ({}));
 import App from "../src/App";
 
 beforeEach(() => {
+  window.history.replaceState(null, "", "/");
   sdk.layers.length = 0;
   vi.stubGlobal("fetch", vi.fn().mockImplementation(async url => response(url.endsWith("/default") ? defaultConfiguration() : [])));
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   HTMLDialogElement.prototype.close = function () { this.open = false; };
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); delete navigator.clipboard; });
 
 function mountApp() {
   const { container } = render(<StrictMode><App /></StrictMode>);
@@ -266,6 +267,8 @@ test("loading a saved snapshot fully reapplies it; cancelling discard preserves 
   expect(columnNames(table)).toEqual(defaultConfiguration().configuration.tableConfig.columns);
 });
 
+// Run twice: the shared settings arrive before the map layer, then the map layer arrives first.
+// Both must be ready before applying settings; viewing a link does not transfer ownership.
 test.each(["API first", "layer first"])("startup waits for remote settings and the layer: %s", async order => {
   const remote = defaultConfiguration();
   remote.configuration.symbolConfig.size.stops = [{ value: 0, size: 12 }, { value: 700, size: 72 }];
@@ -386,4 +389,165 @@ test("failed tree loading shows an error and leaves Apply disabled", async () =>
   act(() => layer.failed(new Error("offline")));
   expect(screen.getAllByRole("alert")[0].textContent).toContain("Could not load tree data");
   expect(screen.getByRole("button", { name: "Apply settings" }).disabled).toBe(true);
+});
+
+// Change a draft without saving, then publish the selected saved record by ID.
+// Opening the dialog sends nothing; a blocked clipboard still leaves a manually copyable URL.
+test("Publishes saved settings only after clicking Publish link and allows manual copying if clipboard access fails", async () => {
+  const own = savedConfiguration();
+  fetch.mockImplementation(async url => response(url.endsWith("/default") ? defaultConfiguration() : [own]));
+  const { layer } = mountApp();
+  await loadLayer(layer);
+  expect(screen.getByRole("button", { name: "Share", exact: true }).disabled).toBe(true);
+  fetch.mockResolvedValueOnce(response(own));
+  fireEvent.change(screen.getByLabelText("My configuration"), { target: { value: own.id } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Share", exact: true }).disabled).toBe(false));
+  fireEvent.change(screen.getByLabelText("At 700 (pt)"), { target: { value: "95" } });
+  const requests = fetch.mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: "Share", exact: true }));
+  expect(screen.getByRole("dialog").textContent).toContain("Anyone with this link can view these saved settings. Unsaved edits are not included.");
+  expect(fetch.mock.calls.length).toBe(requests);
+  fetch.mockResolvedValueOnce(response({ token: "example/token" }));
+  fireEvent.click(screen.getByRole("button", { name: "Publish link" }));
+  const input = await screen.findByLabelText("Share link");
+  expect(fetch.mock.calls.at(-1)).toEqual([`/api/configurations/${own.id}/share`, { credentials: "same-origin", method: "POST" }]);
+  expect(input.value).toBe(`${window.location.origin}/?share=example%2Ftoken`);
+  expect(input.readOnly).toBe(true);
+  expect(sizeStops(layer)[1].size).toBe(40);
+  const writeText = vi.fn().mockRejectedValueOnce(new Error("denied")).mockResolvedValueOnce(undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
+  await screen.findByText("Could not copy automatically. Select the link and copy it manually.");
+  expect(input.value).toContain("?share=");
+  fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
+  await screen.findByText("Copied");
+  expect(writeText).toHaveBeenLastCalledWith(input.value);
+  expect(screen.queryByRole("button", { name: "Dismiss notification" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(screen.getByLabelText("At 700 (pt)").value).toBe("95");
+});
+
+test("shows a publishing error and lets the user click Publish link again", async () => {
+  const own = savedConfiguration();
+  fetch.mockImplementation(async url => response(url.endsWith("/default") ? defaultConfiguration() : [own]));
+  const { layer } = mountApp();
+  await loadLayer(layer);
+  fetch.mockResolvedValueOnce(response(own));
+  fireEvent.change(screen.getByLabelText("My configuration"), { target: { value: own.id } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Share", exact: true }).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Share", exact: true }));
+  fetch.mockRejectedValueOnce(new TypeError("offline"));
+  fireEvent.click(screen.getByRole("button", { name: "Publish link" }));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Configuration service unavailable"));
+  fetch.mockResolvedValueOnce(response({ token: "retry-token" }));
+  fireEvent.click(screen.getByRole("button", { name: "Publish link" }));
+  await screen.findByLabelText("Share link");
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+// Run twice: the shared settings arrive before the map layer, then the map layer arrives first.
+// Both must be ready before applying settings; viewing a link does not transfer ownership.
+test.each(["API first", "layer first"])("opens shared settings instead of System default without adding them to my saved configurations (%s)", async order => {
+  window.history.replaceState(null, "", "/?share=foreign-token");
+  const shared = { ...savedConfiguration("Other person's trees"), id: "foreign-1", visibility: "unlisted" };
+  shared.configuration.symbolConfig.size.stops[1].size = 87;
+  let resolveShared;
+  const pendingShared = new Promise(resolve => { resolveShared = resolve; });
+  fetch.mockImplementation(async url => {
+    if (url.includes("/shared/")) return pendingShared;
+    return response(url.endsWith("/default") ? defaultConfiguration() : []);
+  });
+  const { layer } = mountApp();
+  if (order === "API first") await act(async () => resolveShared(response(shared)));
+  else await loadLayer(layer);
+  expect(layer.renderer).toBeUndefined();
+  expect(screen.getByRole("button", { name: "Apply settings" }).disabled).toBe(true);
+  if (order === "API first") await loadLayer(layer);
+  else await act(async () => resolveShared(response(shared)));
+  expect(sizeStops(layer)[1].size).toBe(87);
+  expect(screen.getByLabelText("My configuration").value).toBe("shared:foreign-token");
+  expect(screen.getByRole("option", { name: "Other person's trees (shared)" })).toBeTruthy();
+  expect(screen.queryByRole("option", { name: "Other person's trees", exact: true })).toBeNull();
+  expect(screen.getByRole("button", { name: "Share", exact: true }).disabled).toBe(true);
+  expect(screen.getByRole("button", { name: "Save as configuration" }).disabled).toBe(true);
+  expect(screen.getByText("Saving a copy of shared settings is not available yet.")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("At 700 (pt)"), { target: { value: "88" } });
+  fireEvent.click(screen.getByRole("button", { name: "Apply settings" }));
+  expect(sizeStops(layer)[1].size).toBe(88);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  expect(screen.getByLabelText("My configuration").disabled).toBe(false);
+  fireEvent.change(screen.getByLabelText("My configuration"), { target: { value: "system-default" } });
+  await waitFor(() => expect(screen.getByLabelText("My configuration").value).toBe("system-default"));
+  expect(window.location.search).toBe("");
+  expect(sizeStops(layer)[1].size).toBe(40);
+  expect(screen.queryByRole("option", { name: "Other person's trees (shared)" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Save as configuration" }).disabled).toBe(false);
+  expect(screen.queryByRole("button", { name: "Dismiss notification" })).toBeNull();
+});
+
+// A missing link returns 404; invalid settings contain a column the dataset does not have.
+// Show the error instead of silently displaying System default. Test retry and dropdown recovery.
+test.each(["missing", "using an unknown column"])("shows an error for shared settings that are %s and lets the user recover", async failure => {
+  window.history.replaceState(null, "", "/?share=bad-token");
+  const invalid = savedConfiguration("Invalid shared");
+  invalid.configuration.tableConfig.columns = ["not-a-field"];
+  fetch.mockImplementation(async url => {
+    if (url.includes("/shared/")) return failure === "missing" ? response({ detail: "Shared configuration not found." }, 404) : response(invalid);
+    return response(url.endsWith("/default") ? defaultConfiguration() : []);
+  });
+  const { layer } = mountApp();
+  await loadLayer(layer);
+  expect(screen.getByRole("alert").textContent).toContain("Could not load shared settings");
+  expect(layer.renderer).toBeUndefined();
+  expect(screen.getByRole("button", { name: "Apply settings" }).disabled).toBe(true);
+  fetch.mockImplementation(async url => response(url.includes("/shared/") ? { ...savedConfiguration("Recovered shared"), id: "foreign-1", visibility: "unlisted" } : url.endsWith("/default") ? defaultConfiguration() : []));
+  if (failure === "missing") {
+    fireEvent.click(screen.getByRole("button", { name: "Retry shared configuration" }));
+    await waitFor(() => expect(screen.getByLabelText("My configuration").value).toBe("shared:bad-token"));
+    expect(window.location.search).toBe("?share=bad-token");
+  }
+  expect(screen.getByLabelText("My configuration").disabled).toBe(false);
+  fireEvent.change(screen.getByLabelText("My configuration"), { target: { value: "system-default" } });
+  await waitFor(() => expect(screen.getByLabelText("My configuration").value).toBe("system-default"));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(window.location.search).toBe("");
+});
+
+test("switching to my saved configuration removes the share link from the address and enables Save and Share", async () => {
+  window.history.replaceState(null, "", "/?share=foreign-token&other=kept");
+  const own = savedConfiguration();
+  const shared = { ...savedConfiguration("Shared trees"), id: "foreign-1", visibility: "unlisted" };
+  fetch.mockImplementation(async url => response(url.includes("/shared/") ? shared : url.endsWith("/default") ? defaultConfiguration() : [own]));
+  const { layer } = mountApp();
+  await loadLayer(layer);
+  fetch.mockResolvedValueOnce(response(own));
+  fireEvent.change(screen.getByLabelText("My configuration"), { target: { value: own.id } });
+  await waitFor(() => expect(screen.getByLabelText("My configuration").value).toBe(own.id));
+  expect(window.location.search).toBe("?other=kept");
+  expect(screen.getByRole("button", { name: "Share", exact: true }).disabled).toBe(false);
+  expect(screen.getByRole("button", { name: "Save as configuration" }).disabled).toBe(false);
+});
+
+// Retry a failed link, switch to System default while waiting, then let the old request fail.
+// The old failure must not overwrite the recovered screen with an error.
+test("does not show an old retry error after the user switches to System default", async () => {
+  window.history.replaceState(null, "", "/?share=bad-token");
+  fetch.mockImplementation(async url => response(url.includes("/shared/") ? { detail: "Shared configuration not found." } : url.endsWith("/default") ? defaultConfiguration() : [], url.includes("/shared/") ? 404 : 200));
+  const { layer } = mountApp();
+  await loadLayer(layer);
+  let rejectRetry;
+  let retrySignal;
+  fetch.mockImplementationOnce((_url, options) => {
+    retrySignal = options.signal;
+    return new Promise((_resolve, reject) => { rejectRetry = reject; });
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Retry shared configuration" }));
+  expect(screen.getByLabelText("My configuration").disabled).toBe(false);
+  fireEvent.change(screen.getByLabelText("My configuration"), { target: { value: "system-default" } });
+  await waitFor(() => expect(screen.getByLabelText("My configuration").value).toBe("system-default"));
+  expect(retrySignal.aborted).toBe(true);
+  await act(async () => rejectRetry(new TypeError("late failure")));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry shared configuration" })).toBeNull();
+  expect(window.location.search).toBe("");
 });

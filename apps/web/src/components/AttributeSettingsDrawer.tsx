@@ -18,9 +18,26 @@ type AttributeSettingsDrawerProps = {
   status: string;
   isBusy: boolean;
   canSave: boolean;
+  saveDisabledReason?: string;
 };
 
-export default function AttributeSettingsDrawer({ isAttributeDrawerOpen, fields, columns, isTableInitialized, layerLoadError, onChange, onApply, onSave, symbologyDraft, onSymbologyChange, error, status, isBusy, canSave }: AttributeSettingsDrawerProps) {
+export default function AttributeSettingsDrawer({
+  isAttributeDrawerOpen,
+  fields,
+  columns,
+  isTableInitialized,
+  layerLoadError,
+  onChange,
+  onApply,
+  onSave,
+  symbologyDraft,
+  onSymbologyChange,
+  error,
+  status,
+  isBusy,
+  canSave,
+  saveDisabledReason
+}: AttributeSettingsDrawerProps) {
   const [search, setSearch] = useState("");
   const draggedField = useRef<string | null>(null);
   if (!isAttributeDrawerOpen) return null;
@@ -114,6 +131,7 @@ export default function AttributeSettingsDrawer({ isAttributeDrawerOpen, fields,
           <p role="status">{!isTableInitialized ? "Loading map…" : status}</p>
           <button type="button" disabled={!isTableInitialized || columns.length === 0 || isBusy} onClick={onApply}>Apply settings</button>
           <button type="button" className="secondary-action" disabled={!isTableInitialized || isBusy || !canSave} onClick={onSave}>Save as configuration</button>
+          {saveDisabledReason && <small>{saveDisabledReason}</small>}
         </footer>
       </div>
     </aside>

@@ -8,10 +8,11 @@ import type { ArcgisMapCustomEvent } from "@arcgis/map-components";
 import type { ArcgisFeatureTable } from "@arcgis/map-components/components/arcgis-feature-table";
 import { Configuration, configure, configureSymbols, configureTable } from "./configuration";
 import { validateSymbology, type SymbologyDraft } from "./symbology";
-import { getConfiguration, getDefaultConfiguration, listConfigurations, saveConfiguration, type ConfigurationSummary, type SavedConfiguration } from "./configurationApi";
+import { getConfiguration, getDefaultConfiguration, getSharedConfiguration, listConfigurations, saveConfiguration, type ConfigurationSummary, type SavedConfiguration } from "./configurationApi";
 import LeftRail from "./components/LeftRail";
 import AttributeSettingsDrawer from "./components/AttributeSettingsDrawer";
 import SaveConfigurationDialog from "./components/SaveConfigurationDialog";
+import ShareConfigurationDialog from "./components/ShareConfigurationDialog";
 import Icon from "./components/Icon";
 
 // This is a REST API - you can open this url on the browser to see the available fields in the layer
@@ -21,6 +22,12 @@ const FEATURE_LAYER_URL =
 const EMPTY_DRAFT: SymbologyDraft = { lowColor: "", highColor: "", lowSize: "", highSize: "" };
 
 type SettingsDraft = { symbology: SymbologyDraft; columns: string[] };
+
+function clearShareQuery() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("share");
+  window.history.replaceState(null, "", url);
+}
 
 function draftFromConfiguration(configuration: Configuration): SettingsDraft {
   const { color, size } = configuration.symbolConfig;
@@ -45,6 +52,12 @@ export default function App() {
   const [defaultConfiguration, setDefaultConfiguration] = useState<SavedConfiguration | null>(null);
   const [defaultError, setDefaultError] = useState<string | null>(null);
   const [isLoadingDefault, setIsLoadingDefault] = useState(true);
+  const [sharedToken, setSharedToken] = useState(() => new URLSearchParams(window.location.search).get("share"));
+  const [sharedConfiguration, setSharedConfiguration] = useState<SavedConfiguration | null>(null);
+  const [sharedError, setSharedError] = useState<string | null>(null);
+  const [isLoadingShared, setIsLoadingShared] = useState(false);
+  const sharedRequest = useRef<AbortController | null>(null);
+  const [sharingConfiguration, setSharingConfiguration] = useState<ConfigurationSummary | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [layerLoadError, setLayerLoadError] = useState<string | null>(null);
   const [configurations, setConfigurations] = useState<ConfigurationSummary[]>([]);
@@ -60,6 +73,9 @@ export default function App() {
   const currentDraft = { symbology: symbologyDraft, columns: draftColumnNames };
   const hasUnappliedChanges = JSON.stringify(currentDraft) !== JSON.stringify({ symbology: appliedSymbologyDraft, columns: appliedColumnNames });
   const hasUnsavedChanges = JSON.stringify(currentDraft) !== JSON.stringify(savedBaseline);
+  const startupConfiguration = sharedToken !== null ? sharedConfiguration : defaultConfiguration;
+  const selectedOwnedConfiguration = sharedToken === null && selectedConfigurationId !== defaultConfiguration?.id
+    ? configurations.find(configuration => configuration.id === selectedConfigurationId) : undefined;
 
   const refreshConfigurations = useCallback(async (signal?: AbortSignal) => {
     setIsLoadingConfigurations(true);
@@ -79,6 +95,26 @@ export default function App() {
     finally { if (!signal?.aborted) setIsLoadingDefault(false); }
   }, []);
 
+  const loadSharedConfiguration = useCallback(async () => {
+    if (sharedToken === null) return;
+    sharedRequest.current?.abort();
+    const controller = new AbortController();
+    sharedRequest.current = controller;
+    const signal = controller.signal;
+    setIsLoadingShared(true);
+    setSharedError(null);
+    try {
+      const saved = await getSharedConfiguration(sharedToken, signal);
+      if (!signal?.aborted) setSharedConfiguration(saved);
+    } catch (error) { if (!signal?.aborted) setSharedError((error as Error).message); }
+    finally { if (!signal?.aborted) setIsLoadingShared(false); }
+  }, [sharedToken]);
+
+  useEffect(() => {
+    void loadSharedConfiguration();
+    return () => sharedRequest.current?.abort();
+  }, [loadSharedConfiguration]);
+
   useEffect(() => {
     const controller = new AbortController();
     void refreshConfigurations(controller.signal);
@@ -93,30 +129,31 @@ export default function App() {
   }, [notification]);
 
   const handleTableRef = useCallback((table: ArcgisFeatureTable | null) => {
-    if (!table || !layer || !defaultConfiguration) return;
+    if (!table || !layer || !startupConfiguration) return;
     if (initializedTable.current !== table) {
       const previous = { renderer: layer.renderer, tableTemplate: table.tableTemplate, hiddenFields: table.hiddenFields };
       try {
-        const draft = draftFromConfiguration(defaultConfiguration.configuration);
+        const draft = draftFromConfiguration(startupConfiguration.configuration);
         validateDraft(draft);
-        configure(layer, table, defaultConfiguration.configuration);
+        configure(layer, table, startupConfiguration.configuration);
         setSymbologyDraft(draft.symbology);
         setAppliedSymbologyDraft(draft.symbology);
         setDraftColumnNames(draft.columns);
         setAppliedColumnNames(draft.columns);
         setSavedBaseline(draft);
-        setSelectedConfigurationId(defaultConfiguration.id);
+        setSelectedConfigurationId(sharedToken !== null ? `shared:${sharedToken}` : startupConfiguration.id);
         initializedTable.current = table;
       } catch (error) {
         layer.renderer = previous.renderer;
         table.tableTemplate = previous.tableTemplate;
         table.hiddenFields = previous.hiddenFields;
-        setDefaultError((error as Error).message);
+        if (sharedToken !== null) setSharedError((error as Error).message);
+        else setDefaultError((error as Error).message);
         return;
       }
     }
     setIsTableInitialized(true);
-  }, [layer, defaultConfiguration]);
+  }, [layer, startupConfiguration, sharedToken]);
 
   const validateDraft = (draft: SettingsDraft): Configuration => {
     const result = validateSymbology(draft.symbology);
@@ -156,6 +193,7 @@ export default function App() {
   };
 
   const openSaveDialog = () => {
+    if (sharedToken !== null) return;
     try {
       validateDraft(currentDraft);
       setSettingsError(null);
@@ -165,7 +203,7 @@ export default function App() {
   };
 
   const saveCurrentDraft = async (name: string) => {
-    // Future: Save a shared configuration as a new owned copy after sharing is introduced.
+    // Future: Allow saving shared settings as a new owned copy.
     setIsSaving(true);
     setSaveError(null);
     let saved: SavedConfiguration;
@@ -189,6 +227,12 @@ export default function App() {
   };
 
   const openSavedConfiguration = async (id: string) => {
+    if (!isTableInitialized && sharedToken !== null && id === defaultConfiguration?.id) {
+      setSharedToken(null);
+      setSharedError(null);
+      clearShareQuery();
+      return;
+    }
     if (!id || (hasUnsavedChanges && !window.confirm("Discard your unsaved settings and open this configuration?"))) return;
     setIsOpeningConfiguration(true);
     setConfigurationError(null);
@@ -203,6 +247,9 @@ export default function App() {
       setSavedBaseline(nextDraft);
       setSelectedConfigurationId(saved.id);
       setSettingsError(null);
+      setSharedToken(null);
+      setSharedError(null);
+      clearShareQuery();
     } catch (error) { setConfigurationError((error as Error).message); }
     finally { setIsOpeningConfiguration(false); }
   };
@@ -260,13 +307,15 @@ export default function App() {
         symbologyDraft={symbologyDraft}
         onSymbologyChange={updateSymbologyDraft}
         error={settingsError}
-        status={hasUnappliedChanges ? "Changes not applied" : hasUnsavedChanges ? "Applied — not saved" : selectedConfigurationId === defaultConfiguration?.id ? "Default applied" : "Saved configuration applied"}
+        status={hasUnappliedChanges ? "Changes not applied" : hasUnsavedChanges ? "Applied — not saved" : sharedToken !== null ? "Shared configuration applied" : selectedConfigurationId === defaultConfiguration?.id ? "Default applied" : "Saved configuration applied"}
         onApply={applySettings}
         onSave={openSaveDialog}
         isBusy={isOpeningConfiguration || isSaving}
-        canSave={!isLoadingConfigurations}
+        canSave={!isLoadingConfigurations && sharedToken === null}
+        saveDisabledReason={sharedToken !== null ? "Saving a copy of shared settings is not available yet." : undefined}
       />
       {isSaveDialogOpen && <SaveConfigurationDialog isSaving={isSaving} error={saveError} onSave={name => void saveCurrentDraft(name)} onCancel={() => setIsSaveDialogOpen(false)} />}
+      {sharingConfiguration && <ShareConfigurationDialog configurationId={sharingConfiguration.id} name={sharingConfiguration.name} onClose={() => setSharingConfiguration(null)} />}
       {notification && <div className="configuration-toast">
         <span className="configuration-toast-icon"><Icon name="check-circle-f" /></span>
         <div role="status"><strong>Success</strong><p>{notification.message}</p></div>
@@ -275,14 +324,17 @@ export default function App() {
       <div className="map-workspace">
         <div className="configuration-toolbar">
           {/* Future: Style the native select chevron with an approved icon while preserving native keyboard behaviour. */}
-          <label>My configuration<select value={selectedConfigurationId} disabled={!isTableInitialized || isLoadingConfigurations || isOpeningConfiguration || isSaving} onChange={event => void openSavedConfiguration(event.target.value)}>
+          <label>My configuration<select value={selectedConfigurationId} disabled={(!isTableInitialized && !(sharedToken !== null && defaultConfiguration)) || isLoadingConfigurations || isOpeningConfiguration || isSaving} onChange={event => void openSavedConfiguration(event.target.value)}>
             <option value="">{isLoadingConfigurations ? "Loading configurations…" : "Choose a configuration"}</option>
             {defaultConfiguration && <option value={defaultConfiguration.id}>{defaultConfiguration.name}</option>}
-            {configurations.filter(configuration => configuration.id !== defaultConfiguration?.id).map(configuration => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}
+            {sharedToken !== null && sharedConfiguration && <option value={`shared:${sharedToken}`}>{sharedConfiguration.name} (shared)</option>}
+            {configurations.filter(configuration => configuration.id !== defaultConfiguration?.id).map(configuration => <option key={configuration.id} value={configuration.id} disabled={!isTableInitialized}>{configuration.name}</option>)}
           </select></label>
+          <button type="button" disabled={!selectedOwnedConfiguration || !isTableInitialized || isOpeningConfiguration || isSaving} onClick={() => selectedOwnedConfiguration && setSharingConfiguration(selectedOwnedConfiguration)}>Share</button>
           {isOpeningConfiguration && <span>Opening…</span>}
           {configurationError && <><span role="alert">{configurationError}</span><button type="button" disabled={isLoadingConfigurations} onClick={() => void refreshConfigurations()}>Retry list</button></>}
           {defaultError && <><span role="alert">Could not load default settings: {defaultError}</span><button type="button" disabled={isLoadingDefault} onClick={() => void loadDefaultConfiguration()}>Retry default</button></>}
+          {sharedError && <><span role="alert">Could not load shared settings: {sharedError}</span><button type="button" disabled={isLoadingShared} onClick={() => void loadSharedConfiguration()}>Retry shared configuration</button></>}
           {layerLoadError && <span role="alert">{layerLoadError}</span>}
         </div>
         <arcgis-map
