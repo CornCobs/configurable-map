@@ -10,21 +10,34 @@ The table starts with all dataset fields. Open **Table** in the left rail to edi
 
 The React/TypeScript frontend is in `apps/web`. ArcGIS components display the map, legend and table using hosted tree data. `App.tsx` holds draft/applied state, `symbology.ts` validates symbols, and `configuration.ts` updates the renderer and table separately. Components under `src/components` provide the left rail and attribute drawer.
 
-Future: Add backend/storage details and the system architecture diagram when implemented.
+The Python/FastAPI backend in `apps/api` currently provides a health endpoint and generated API documentation. Future: Add configuration storage and connect the frontend to the API.
 
 ## Local setup instructions
 
-Use Node.js 24 (tested with 24.16.0) and pnpm. From the repository root:
+Use Node.js 24 (tested with 24.16.0), pnpm and Python 3.11 (tested with 3.11.2). Run these one-time setup commands from the repository root in PowerShell.
 
-```sh
-cd apps/web
-pnpm install
-pnpm run dev
+**Frontend setup** — install the React app's dependencies:
+
+```powershell
+pnpm --dir apps/web install
 ```
 
-Open the URL printed by Vite. ArcGIS needs internet access.
+**Backend setup** — create a Python environment and install the API/test dependencies:
 
-From `apps/web`: `pnpm test` runs helper and App integration tests; `pnpm run build` builds the app; `pnpm run preview` previews the build.
+```powershell
+python -m venv apps/api/.venv
+.\apps\api\.venv\Scripts\python.exe -m pip install -r apps/api/requirements-dev.txt
+```
+
+**Start the app** — run frontend and backend together from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\dev.ps1
+```
+
+The combined command prints both URLs; Ctrl+C stops both servers. Frontend edits reload automatically; restart the combined command after Python edits. ArcGIS needs internet access.
+
+From `apps/web`: `pnpm test` runs frontend tests; `pnpm run build` builds the app; `pnpm run preview` previews the build. From `apps/api`: `.\.venv\Scripts\python.exe -m unittest discover -s tests -v` runs backend tests.
 
 ## API documentation or a link to it
 
