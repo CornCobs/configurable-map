@@ -16,19 +16,20 @@ if (!(Test-Path $pythonPath) -or !(Test-Path $vitePath)) {
 if ($WebPort -eq $ApiPort) { throw 'Frontend and backend must use different ports.' }
 $nodePath = (Get-Command node -ErrorAction Stop).Source
 
-function Start-Server($Executable, $Arguments, $Directory) {
+function Start-Server($Executable, $Arguments, $Directory, $ApiProxyTarget = $null) {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $Executable
     $startInfo.Arguments = $Arguments
     $startInfo.WorkingDirectory = $Directory
     $startInfo.UseShellExecute = $false
+    if ($ApiProxyTarget) { $startInfo.EnvironmentVariables['API_PROXY_TARGET'] = $ApiProxyTarget }
     return [System.Diagnostics.Process]::Start($startInfo)
 }
 
 $servers = @()
 try {
     $servers += Start-Server $pythonPath "-m uvicorn app.main:app --host 127.0.0.1 --port $ApiPort" $apiDirectory
-    $servers += Start-Server $nodePath "`"$vitePath`" --host 127.0.0.1 --port $WebPort --strictPort --clearScreen false" $webDirectory
+    $servers += Start-Server $nodePath "`"$vitePath`" --host 127.0.0.1 --port $WebPort --strictPort --clearScreen false" $webDirectory "http://127.0.0.1:$ApiPort"
     Write-Host "Starting frontend: http://127.0.0.1:$WebPort"
     Write-Host "Starting API docs: http://127.0.0.1:$ApiPort/api/docs"
     Write-Host 'Press Ctrl+C to stop both. Restart this command after Python changes.'
