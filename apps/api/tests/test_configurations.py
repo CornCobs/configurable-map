@@ -9,6 +9,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from app.defaults import DEFAULT_CONFIGURATION_ID, SYSTEM_OWNER_ID
+from app.demo_configurations import DEMO_SHARED_CONFIGURATIONS, DEMO_SHARE_OWNER_ID
 from app.main import create_app, DEMO_OWNER_ID
 from app.models import CreateConfiguration
 from app.repository import ConfigurationRepository, DuplicateNameError
@@ -29,6 +30,34 @@ def draft(name="My trees"):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_demo_shared_seeds_are_accessible_and_preserved_on_restart(self):
+        repository = ConfigurationRepository(self.database_path)
+        with closing(repository.connect()) as connection:
+            rows = [dict(row) for row in connection.execute(
+                "SELECT * FROM configurations WHERE owner_id = ? ORDER BY id", (DEMO_SHARE_OWNER_ID,),
+            )]
+        self.assertEqual(len(rows), 2)
+        expected = dict(DEMO_SHARED_CONFIGURATIONS)
+        self.assertEqual(len({row["share_token"] for row in rows}), 2)
+        for row in rows:
+            self.assertRegex(row["share_token"], r"^[A-Za-z0-9_-]{43}$")
+            self.assertTrue(row["created_at"])
+            response = self.client.get(f"/api/configurations/shared/{row['share_token']}")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["configuration"], expected[row["id"]].configuration.model_dump())
+            self.assertEqual(response.json()["name"], expected[row["id"]].name)
+            self.assertEqual(self.client.post(f"/api/configurations/{row['id']}/share").status_code, 404)
+        self.assertEqual(self.client.get("/api/configurations").json(), [])
+        # Preserve existing records, including locally edited demo settings and links.
+        with closing(repository.connect()) as connection, connection:
+            connection.execute("UPDATE configurations SET name = ? WHERE id = ?", ("Edited demo", rows[0]["id"]))
+        rows[0]["name"] = "Edited demo"
+        repository.initialize()
+        with closing(repository.connect()) as connection:
+            self.assertEqual([dict(row) for row in connection.execute(
+                "SELECT * FROM configurations WHERE owner_id = ? ORDER BY id", (DEMO_SHARE_OWNER_ID,),
+            )], rows)
+
     def setUp(self):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -63,7 +92,7 @@ class ConfigurationTests(unittest.TestCase):
         repository.initialize()
         self.assertEqual(repository.get(SYSTEM_OWNER_ID, DEFAULT_CONFIGURATION_ID), saved)
         with closing(repository.connect()) as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM configurations").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM configurations").fetchone()[0], 3)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM user_defaults").fetchone()[0], 0)
         self.assertEqual(self.client.get("/api/configurations").json(), [])
         self.assertEqual(self.client.get("/api/configurations/system-default").status_code, 404)
@@ -89,7 +118,7 @@ class ConfigurationTests(unittest.TestCase):
                     {key: custom[key] for key in ("id", "name", "visibility", "created_at")},
                 ])
         with closing(repository.connect()) as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM configurations").fetchone()[0], 2)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM configurations").fetchone()[0], 4)
 
     def test_seed_id_collision_preserves_other_owner_record(self):
         repository = ConfigurationRepository(self.database_path)
@@ -191,3 +220,56 @@ class ConfigurationTests(unittest.TestCase):
         self.addCleanup(connection.close)
         with self.assertRaises(sqlite3.IntegrityError):
             connection.execute("INSERT INTO user_defaults VALUES (?, ?)", (DEMO_OWNER_ID, "missing"))
+
+    def test_publish_returns_stable_token_and_preserves_saved_settings_after_restart(self):
+        saved = self.client.post("/api/configurations", json=draft()).json()
+        url = f"/api/configurations/{saved['id']}/share"
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200)
+        token = response.json()["token"]
+        self.assertEqual(set(response.json()), {"token"})
+        self.assertRegex(token, r"^[A-Za-z0-9_-]{43}$")
+        self.assertEqual(self.client.post(url).json(), {"token": token})
+        expected = {**saved, "visibility": "unlisted"}
+        self.assertEqual(self.client.get(f"/api/configurations/shared/{token}").json(), expected)
+        self.assertEqual(self.client.get(f"/api/configurations/{saved['id']}").json(), expected)
+        summary = self.client.get("/api/configurations").json()[0]
+        self.assertEqual(summary, {key: expected[key] for key in ("id", "name", "visibility", "created_at")})
+        with TestClient(create_app(self.database_path)) as restarted:
+            self.assertEqual(restarted.post(url).json(), {"token": token})
+            self.assertEqual(restarted.get(f"/api/configurations/shared/{token}").json(), expected)
+
+    def test_private_and_unknown_tokens_are_not_readable(self):
+        saved = self.client.post("/api/configurations", json=draft()).json()
+        repository = ConfigurationRepository(self.database_path)
+        with closing(repository.connect()) as connection, connection:
+            connection.execute("UPDATE configurations SET share_token = ? WHERE id = ?", ("inactive-token", saved["id"]))
+        for token in ("unknown-token", "inactive-token", saved["id"]):
+            self.assertEqual(self.client.get(f"/api/configurations/shared/{token}").status_code, 404)
+
+    def test_shared_foreign_record_is_readable_but_cannot_be_published_by_demo_owner(self):
+        repository = ConfigurationRepository(self.database_path)
+        foreign = repository.create("another-owner", CreateConfiguration.model_validate(draft()))
+        for configuration_id in (foreign["id"], "missing", DEFAULT_CONFIGURATION_ID):
+            response = self.client.post(f"/api/configurations/{configuration_id}/share")
+            self.assertEqual(response.status_code, 404)
+        self.assertEqual(repository.get("another-owner", foreign["id"]), foreign)
+        token = repository.share("another-owner", foreign["id"])
+        self.assertEqual(self.client.get(f"/api/configurations/shared/{token}").json(),
+                        {**foreign, "visibility": "unlisted"})
+        self.assertEqual(self.client.get("/api/configurations").json(), [])
+        self.assertEqual(self.client.get(f"/api/configurations/{foreign['id']}").status_code, 404)
+        self.assertEqual(self.client.get("/api/configurations/default").json()["visibility"], "private")
+
+    def test_simultaneous_shares_return_the_same_token(self):
+        saved = self.client.post("/api/configurations", json=draft()).json()
+
+        def publish(_):
+            return self.client.post(f"/api/configurations/{saved['id']}/share")
+
+        with ThreadPoolExecutor(max_workers=4) as workers:
+            responses = list(workers.map(publish, range(4)))
+        self.assertEqual([response.status_code for response in responses], [200] * 4)
+        tokens = {response.json()["token"] for response in responses}
+        self.assertEqual(len(tokens), 1)
+        self.assertEqual(self.client.get(f"/api/configurations/shared/{tokens.pop()}").json()["configuration"], saved["configuration"])

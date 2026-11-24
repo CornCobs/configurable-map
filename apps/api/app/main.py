@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .defaults import DEFAULT_CONFIGURATION_ID, SYSTEM_OWNER_ID
-from .models import ConfigurationSummary, CreateConfiguration, SavedConfiguration
+from .models import ConfigurationSummary, CreateConfiguration, SavedConfiguration, ShareConfiguration
 from .repository import ConfigurationRepository, DuplicateNameError
 
 
@@ -60,6 +60,21 @@ def create_app(database_path: Path = DEFAULT_DATABASE_PATH) -> FastAPI:
         record = repository.get(SYSTEM_OWNER_ID, DEFAULT_CONFIGURATION_ID)
         if record is None:
             raise HTTPException(status_code=404, detail="Default configuration not found.")
+        return record
+
+    # Future: Use login ownership for publishing, and allow owners to revoke sharing links.
+    @app.post("/api/configurations/{configuration_id}/share", response_model=ShareConfiguration)
+    def share_configuration(configuration_id: str):
+        token = repository.share(DEMO_OWNER_ID, configuration_id)
+        if token is None:
+            raise HTTPException(status_code=404, detail="Configuration not found.")
+        return {"token": token}
+
+    @app.get("/api/configurations/shared/{token}", response_model=SavedConfiguration)
+    def get_shared_configuration(token: str):
+        record = repository.get_shared(token)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Shared configuration not found.")
         return record
 
     @app.get("/api/configurations/{configuration_id}", response_model=SavedConfiguration)

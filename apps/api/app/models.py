@@ -96,3 +96,7 @@ class ConfigurationSummary(StrictModel):
 
 class SavedConfiguration(ConfigurationSummary):
     configuration: Configuration
+
+
+class ShareConfiguration(StrictModel):
+    token: str

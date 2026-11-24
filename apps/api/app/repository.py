@@ -2,10 +2,12 @@ from contextlib import closing
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import secrets
 import sqlite3
 from uuid import uuid4
 
 from .defaults import DEFAULT_CONFIGURATION, DEFAULT_CONFIGURATION_ID, SYSTEM_OWNER_ID
+from .demo_configurations import DEMO_SHARED_CONFIGURATIONS, DEMO_SHARE_OWNER_ID
 from .models import CreateConfiguration
 
 
@@ -57,6 +59,15 @@ class ConfigurationRepository:
             ).fetchone()
             if owner["owner_id"] != SYSTEM_OWNER_ID:
                 raise ValueError("The predefined default ID belongs to another owner.")
+            # Future: Move demo fixtures into explicit demo-account setup when login is added.
+            for configuration_id, draft in DEMO_SHARED_CONFIGURATIONS:
+                connection.execute(
+                    """INSERT INTO configurations
+                    (id, name, owner_id, visibility, share_token, settings_json, created_at)
+                    VALUES (?, ?, ?, 'unlisted', ?, ?, ?) ON CONFLICT(id) DO NOTHING""",
+                    (configuration_id, draft.name, DEMO_SHARE_OWNER_ID, secrets.token_urlsafe(32),
+                    draft.configuration.model_dump_json(), datetime.now(timezone.utc).isoformat()),
+                )
 
     def create(self, owner_id: str, draft: CreateConfiguration):
         record = {
@@ -71,7 +82,7 @@ class ConfigurationRepository:
                 connection.execute(
                     "INSERT INTO configurations (id, name, owner_id, settings_json, created_at) VALUES (?, ?, ?, ?, ?)",
                     (record["id"], record["name"], owner_id,
-                     json.dumps(record["configuration"], allow_nan=False), record["created_at"]),
+                    json.dumps(record["configuration"], allow_nan=False), record["created_at"]),
                 )
             except sqlite3.IntegrityError as error:
                 if error.sqlite_errorname == "SQLITE_CONSTRAINT_UNIQUE":
@@ -85,6 +96,30 @@ class ConfigurationRepository:
                 "SELECT id, name, visibility, created_at FROM configurations WHERE owner_id = ? ORDER BY created_at DESC, id",
                 (owner_id,),
             )]
+
+    def share(self, owner_id: str, configuration_id: str):
+        with closing(self.connect()) as connection, connection:
+            row = connection.execute(
+                """UPDATE configurations
+                SET visibility = 'unlisted', share_token = COALESCE(share_token, ?)
+                WHERE id = ? AND owner_id = ? AND id != ?
+                RETURNING share_token""",
+                (secrets.token_urlsafe(32), configuration_id, owner_id, DEFAULT_CONFIGURATION_ID),
+            ).fetchone()
+        return row["share_token"] if row else None
+
+    def get_shared(self, token: str):
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                """SELECT id, name, visibility, created_at, settings_json FROM configurations
+                WHERE share_token = ? AND visibility = 'unlisted'""",
+                (token,),
+            ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record["configuration"] = json.loads(record.pop("settings_json"))
+        return record
 
     def get(self, owner_id: str, configuration_id: str):
         with closing(self.connect()) as connection:

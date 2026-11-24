@@ -48,6 +48,8 @@ Tree data comes from the [ArcGIS feature service](https://services.arcgis.com/V6
 
 With the backend running, open [FastAPI docs](http://127.0.0.1:8000/api/docs). `POST /api/configurations` creates a named configuration; `GET /api/configurations` lists saved records; `GET /api/configurations/{id}` reopens one. Invalid payloads return `422`, duplicate names `409`, and missing/inaccessible records `404`.
 
+`POST /api/configurations/{id}/share` publishes an owned custom configuration and returns its stable token. `GET /api/configurations/shared/{token}` loads an unlisted configuration without requiring ownership; invalid or private tokens return `404`.
+
 `GET /api/configurations/default` returns the system's predefined configuration. The backend creates it in SQLite only if missing; restarts preserve existing settings. It uses the starter colours/sizes and shows `Leaf_Area`, then `Leaf_Bmass`. The frontend waits for this response before enabling settings; failures show a retry action rather than using a local fallback.
 
 ## Assumptions and trade-offs
