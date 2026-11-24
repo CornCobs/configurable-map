@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -7,6 +8,7 @@ import unittest
 
 from fastapi.testclient import TestClient
 
+from app.defaults import DEFAULT_CONFIGURATION_ID, SYSTEM_OWNER_ID
 from app.main import create_app, DEMO_OWNER_ID
 from app.models import CreateConfiguration
 from app.repository import ConfigurationRepository, DuplicateNameError
@@ -35,6 +37,69 @@ class ConfigurationTests(unittest.TestCase):
         self.client = TestClient(self.app)
         self.client.__enter__()
         self.addCleanup(self.client.__exit__, None, None, None)
+
+    def test_predefined_default_returns_seeded_payload_outside_custom_list(self):
+        response = self.client.get("/api/configurations/default")
+        self.assertEqual(response.status_code, 200)
+        saved = response.json()
+        self.assertEqual(saved["visibility"], "private")
+        self.assertTrue(saved["created_at"])
+        self.assertEqual({key: saved[key] for key in ("id", "name", "configuration")}, {
+            "id": "system-default",
+            "name": "System default",
+            "configuration": {
+                "symbolConfig": {
+                    "color": {"field": "Leaf_Area", "stops": [
+                        {"value": 10, "color": "#ffffff"}, {"value": 40000, "color": "#00fd00"},
+                    ]},
+                    "size": {"field": "Leaf_Bmass", "stops": [
+                        {"value": 0, "size": 5}, {"value": 700, "size": 40},
+                    ]},
+                },
+                "tableConfig": {"columns": ["Leaf_Area", "Leaf_Bmass"]},
+            },
+        })
+        repository = ConfigurationRepository(self.database_path)
+        repository.initialize()
+        self.assertEqual(repository.get(SYSTEM_OWNER_ID, DEFAULT_CONFIGURATION_ID), saved)
+        with closing(repository.connect()) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM configurations").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM user_defaults").fetchone()[0], 0)
+        self.assertEqual(self.client.get("/api/configurations").json(), [])
+        self.assertEqual(self.client.get("/api/configurations/system-default").status_code, 404)
+
+    def test_restart_preserves_default_edits_and_same_name_custom(self):
+        original = self.client.get("/api/configurations/default").json()
+        response = self.client.post("/api/configurations", json=draft("System default"))
+        self.assertEqual(response.status_code, 201)
+        custom = response.json()
+        self.assertNotEqual(custom["id"], original["id"])
+        changed = draft("Edited system default")
+        repository = ConfigurationRepository(self.database_path)
+        with closing(repository.connect()) as connection, connection:
+            connection.execute(
+                "UPDATE configurations SET name = ?, settings_json = ? WHERE id = ?",
+                (changed["name"], json.dumps(changed["configuration"]), DEFAULT_CONFIGURATION_ID),
+            )
+        for _ in range(2):
+            with TestClient(create_app(self.database_path)) as restarted:
+                self.assertEqual(restarted.get("/api/configurations/default").json(), {**original, **changed})
+                self.assertEqual(restarted.get(f"/api/configurations/{custom['id']}").json(), custom)
+                self.assertEqual(restarted.get("/api/configurations").json(), [
+                    {key: custom[key] for key in ("id", "name", "visibility", "created_at")},
+                ])
+        with closing(repository.connect()) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM configurations").fetchone()[0], 2)
+
+    def test_seed_id_collision_preserves_other_owner_record(self):
+        repository = ConfigurationRepository(self.database_path)
+        with closing(repository.connect()) as connection, connection:
+            connection.execute("UPDATE configurations SET owner_id = ? WHERE id = ?",
+                            (DEMO_OWNER_ID, DEFAULT_CONFIGURATION_ID))
+        original = repository.get(DEMO_OWNER_ID, DEFAULT_CONFIGURATION_ID)
+        with self.assertRaisesRegex(ValueError, "belongs to another owner"):
+            repository.initialize()
+        self.assertEqual(repository.get(DEMO_OWNER_ID, DEFAULT_CONFIGURATION_ID), original)
 
     def test_round_trip_preserves_order_inverse_sizes_and_survives_restart(self):
         self.assertEqual(self.client.get("/api/configurations").json(), [])

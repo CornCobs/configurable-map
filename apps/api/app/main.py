@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from .defaults import DEFAULT_CONFIGURATION_ID, SYSTEM_OWNER_ID
 from .models import ConfigurationSummary, CreateConfiguration, SavedConfiguration
 from .repository import ConfigurationRepository, DuplicateNameError
 
@@ -52,6 +53,14 @@ def create_app(database_path: Path = DEFAULT_DATABASE_PATH) -> FastAPI:
     @app.get("/api/configurations", response_model=list[ConfigurationSummary])
     def list_configurations():
         return repository.list(DEMO_OWNER_ID)
+
+    # Future: Resolve a signed-in user's preferred configuration before this system default.
+    @app.get("/api/configurations/default", response_model=SavedConfiguration)
+    def get_default_configuration():
+        record = repository.get(SYSTEM_OWNER_ID, DEFAULT_CONFIGURATION_ID)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Default configuration not found.")
+        return record
 
     @app.get("/api/configurations/{configuration_id}", response_model=SavedConfiguration)
     def get_configuration(configuration_id: str):

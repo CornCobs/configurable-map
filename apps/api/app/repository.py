@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
+from .defaults import DEFAULT_CONFIGURATION, DEFAULT_CONFIGURATION_ID, SYSTEM_OWNER_ID
 from .models import CreateConfiguration
 
 
@@ -45,6 +46,17 @@ class ConfigurationRepository:
                     configuration_id TEXT NOT NULL REFERENCES configurations(id)
                 );
             """)
+            connection.execute(
+                """INSERT INTO configurations (id, name, owner_id, settings_json, created_at)
+                VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING""",
+                (DEFAULT_CONFIGURATION_ID, DEFAULT_CONFIGURATION.name, SYSTEM_OWNER_ID,
+                DEFAULT_CONFIGURATION.configuration.model_dump_json(), datetime.now(timezone.utc).isoformat()),
+            )
+            owner = connection.execute(
+                "SELECT owner_id FROM configurations WHERE id = ?", (DEFAULT_CONFIGURATION_ID,),
+            ).fetchone()
+            if owner["owner_id"] != SYSTEM_OWNER_ID:
+                raise ValueError("The predefined default ID belongs to another owner.")
 
     def create(self, owner_id: str, draft: CreateConfiguration):
         record = {
