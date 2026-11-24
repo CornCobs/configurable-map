@@ -4,9 +4,9 @@
 
 A React map of the [Landscape Trees dataset](https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0). Users edit point colour and size, then select **Apply**. Invalid edits show an error and leave the previous settings applied. Apply is disabled while tree data loads; load failures show an error.
 
-The table starts with all dataset fields. Open **Settings** in the left rail to edit symbology and column chips. Click a selected name to hide it; search hidden columns and click to add. Drag a grip to reorder, or focus it and press Alt + Left/Right. **Apply settings** updates only the changed parts and keeps the drawer open; symbology-only edits preserve the table layout. Closing through the rail keeps unapplied drafts. At least one column must remain selected.
+At startup, the app loads **System default** from the backend and selects it in the dropdown. Its initial visible columns are `Leaf_Area` and `Leaf_Bmass`. Open **Settings** in the left rail to edit symbology and column chips. Click a selected name to hide it; search hidden columns and click to add. Drag a grip to reorder, or focus it and press Alt + Left/Right. **Apply settings** updates only the changed parts and keeps the drawer open; symbology-only edits preserve the table layout. Closing through the rail keeps unapplied drafts. At least one column must remain selected.
 
-**Save as configuration** validates the current draft without requiring Apply, asks for a name, then saves and applies it. Select a saved configuration above the map to apply it; **View config** reloads the selected settings. Duplicate names (ignoring case and surrounding spaces) show an inline error. Save/open confirmations appear briefly at the top right; errors remain visible for correction.
+**Save as configuration** validates the current draft without requiring Apply, asks for a name, then saves and applies it. Select a saved configuration above the map to load and apply it. Duplicate names (ignoring case and surrounding spaces) show an inline error. A success message appears briefly at the top right only when a new configuration is saved; errors remain visible for correction.
 
 
 ## Architecture explanation
@@ -58,7 +58,9 @@ With the backend running, open [FastAPI docs](http://127.0.0.1:8000/api/docs). `
 
 ## Known limitations
 
-**Apply settings** updates the map and table without saving to the database. Saved configurations remain available after refreshing the page or restarting the backend; select one from the dropdown to load it again. Loading a default configuration from the backend at startup and sharing configurations are not implemented yet. The fields and data ranges used for point colour and size cannot be changed. The open settings drawer covers part of the map and table.
+**Apply settings** updates the map and table without saving to the database. Saved configurations remain available after refreshing the page or restarting the backend; select one from the dropdown to load it again. Personal default preferences and sharing are not implemented yet; each page reload starts with System default.
+
+The open settings drawer covers part of the map and table.
 
 Browser checks confirmed that users can save edits without clicking Apply first, receive an error for duplicate names, and load saved configurations after refreshing. Automated App tests check that symbology and column changes apply independently, configurations can be saved and loaded, and errors preserve settings for retry. These tests simulate ArcGIS and do not check how the real map renders. Final manual acceptance, mobile layout and accessibility checks are still pending.
 

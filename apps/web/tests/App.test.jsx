@@ -33,7 +33,7 @@ import App from "../src/App";
 
 beforeEach(() => {
   sdk.layers.length = 0;
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(async url => response(url.endsWith("/default") ? defaultConfiguration() : [])));
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   HTMLDialogElement.prototype.close = function () { this.open = false; };
 });
@@ -48,14 +48,14 @@ function mountApp() {
   return { container, map, layer: sdk.layers[0] };
 }
 
-function loadLayer(layer) { act(() => layer.loaded()); }
+async function loadLayer(layer) { await act(async () => layer.loaded()); }
 function sizeStops(layer) { return layer.renderer.visualVariables.find(variable => variable.type === "size").stops; }
 
-test("real edits and Apply update the renderer; later edits preserve applied settings and table state", () => {
+test("real edits and Apply update the renderer; later edits preserve applied settings and table state", async () => {
   const { container, map, layer } = mountApp();
   const apply = screen.getByRole("button", { name: "Apply settings" });
   expect(apply.disabled).toBe(true);
-  loadLayer(layer);
+  await loadLayer(layer);
   expect(apply.disabled).toBe(false);
   const initialRenderer = layer.renderer;
   const table = container.querySelector("arcgis-feature-table");
@@ -93,9 +93,9 @@ test("real edits and Apply update the renderer; later edits preserve applied set
   expect(map.view.map.add).toHaveBeenCalledTimes(1);
 });
 
-test("invalid input keeps the last renderer and can be corrected through the actual form", () => {
+test("invalid input keeps the last renderer and can be corrected through the actual form", async () => {
   const { layer } = mountApp();
-  loadLayer(layer);
+  await loadLayer(layer);
   const input = screen.getByLabelText("At 700 (pt)");
   const apply = screen.getByRole("button", { name: "Apply settings" });
   fireEvent.change(input, { target: { value: "70" } });
@@ -132,15 +132,16 @@ function savedConfiguration(name = "My trees") {
     },
   };
 }
+function defaultConfiguration() { return { ...savedConfiguration("System default"), id: "system-default" }; }
 async function openSave(name = "My trees") {
   await waitFor(() => expect(screen.getByRole("button", { name: "Save as configuration" }).disabled).toBe(false));
   fireEvent.click(screen.getByRole("button", { name: "Save as configuration" }));
   fireEvent.change(screen.getByLabelText("Configuration name"), { target: { value: name } });
 }
 
-test("table drafts survive rail closing, reorder only on Apply, and preserve the renderer", () => {
+test("table drafts survive rail closing, reorder only on Apply, and preserve the renderer", async () => {
   const { container, layer } = mountApp();
-  loadLayer(layer);
+  await loadLayer(layer);
   const table = container.querySelector("arcgis-feature-table");
   const renderer = layer.renderer;
   const template = table.tableTemplate;
@@ -163,9 +164,9 @@ test("table drafts survive rail closing, reorder only on Apply, and preserve the
   expect(layer.renderer).toBe(renderer);
 });
 
-test("an empty column draft blocks Apply until a hidden column is selected", () => {
+test("an empty column draft blocks Apply until a hidden column is selected", async () => {
   const { container, layer } = mountApp();
-  loadLayer(layer);
+  await loadLayer(layer);
   const table = container.querySelector("arcgis-feature-table");
   const template = table.tableTemplate;
   for (const name of ["Tree_ID", "Cmn_Name", "Leaf_Area", "Leaf_Bmass"]) fireEvent.click(screen.getByRole("button", { name: `Hide ${name}` }));
@@ -180,7 +181,7 @@ test("an empty column draft blocks Apply until a hidden column is selected", () 
 
 test("Save without Apply persists the draft and fully applies the successful snapshot", async () => {
   const { container, layer } = mountApp();
-  loadLayer(layer);
+  await loadLayer(layer);
   const table = container.querySelector("arcgis-feature-table");
   const renderer = layer.renderer;
   fireEvent.change(screen.getByLabelText("At 700 (pt)"), { target: { value: "60" } });
@@ -210,7 +211,7 @@ test.each([
   ["network", () => Promise.reject(new TypeError("offline")), "Configuration service unavailable"],
 ])("a %s Save error retains the name, draft and applied settings", async (_kind, failure, message) => {
   const { container, layer } = mountApp();
-  loadLayer(layer);
+  await loadLayer(layer);
   const renderer = layer.renderer;
   const table = container.querySelector("arcgis-feature-table");
   const template = table.tableTemplate;
@@ -229,9 +230,9 @@ test.each([
 
 test("loading a saved snapshot fully reapplies it; cancelling discard preserves the draft", async () => {
   const saved = savedConfiguration();
-  fetch.mockResolvedValue(response([saved]));
+  fetch.mockImplementation(async url => response(url.endsWith("/default") ? defaultConfiguration() : [saved]));
   const { container, layer } = mountApp();
-  loadLayer(layer);
+  await loadLayer(layer);
   const select = screen.getByLabelText("My configuration");
   await waitFor(() => expect(select.disabled).toBe(false));
   const table = container.querySelector("arcgis-feature-table");
@@ -243,18 +244,93 @@ test("loading a saved snapshot fully reapplies it; cancelling discard preserves 
   fireEvent.change(select, { target: { value: saved.id } });
   expect(confirm).toHaveBeenCalledOnce();
   expect(fetch.mock.calls.length).toBe(requests);
-  expect(select.value).toBe("");
+  expect(select.value).toBe("system-default");
   expect(screen.getByLabelText("At 700 (pt)").value).toBe("65");
   confirm.mockReturnValue(true);
   fetch.mockResolvedValueOnce(response(saved));
   fireEvent.change(select, { target: { value: saved.id } });
-  await screen.findByText("Configuration “My trees” loaded successfully.");
+  await waitFor(() => expect(select.value).toBe(saved.id));
+  expect(screen.queryByRole("button", { name: "Dismiss notification" })).toBeNull();
   expect(sizeStops(layer)[1].size).toBe(40);
   expect(layer.renderer).not.toBe(renderer);
   expect(columnNames(table)).toEqual(saved.configuration.tableConfig.columns);
   expect(screen.getByLabelText("At 700 (pt)").value).toBe("40");
   expect(select.value).toBe(saved.id);
   expect(screen.getAllByRole("status")[0].textContent).toBe("Saved configuration applied");
+  fetch.mockResolvedValueOnce(response(defaultConfiguration()));
+  fireEvent.change(select, { target: { value: "system-default" } });
+  await waitFor(() => expect(select.value).toBe("system-default"));
+  expect(screen.queryByRole("button", { name: "Dismiss notification" })).toBeNull();
+  expect(fetch.mock.calls.at(-1)[0]).toBe("/api/configurations/default");
+  expect(select.value).toBe("system-default");
+  expect(columnNames(table)).toEqual(defaultConfiguration().configuration.tableConfig.columns);
+});
+
+test.each(["API first", "layer first"])("startup waits for remote settings and the layer: %s", async order => {
+  const remote = defaultConfiguration();
+  remote.configuration.symbolConfig.size.stops = [{ value: 0, size: 12 }, { value: 700, size: 72 }];
+  remote.configuration.symbolConfig.color.stops[0].color = "#123456";
+  remote.configuration.tableConfig.columns = ["Leaf_Area", "Leaf_Bmass"];
+  let resolveDefault;
+  const pendingDefault = new Promise(resolve => { resolveDefault = resolve; });
+  fetch.mockImplementation(async url => url.endsWith("/default") ? pendingDefault : response([]));
+  const { container, layer } = mountApp();
+  const apply = screen.getByRole("button", { name: "Apply settings" });
+  if (order === "API first") {
+    await act(async () => resolveDefault(response(remote)));
+  } else {
+    await loadLayer(layer);
+  }
+  expect(apply.disabled).toBe(true);
+  expect(layer.renderer).toBeUndefined();
+  expect(screen.queryByLabelText("At 700 (pt)")).toBeNull();
+  if (order === "API first") {
+    await loadLayer(layer);
+  } else {
+    await act(async () => resolveDefault(response(remote)));
+  }
+  expect(apply.disabled).toBe(false);
+  expect(sizeStops(layer).map(stop => stop.size)).toEqual([12, 72]);
+  expect(screen.getByLabelText("At 10").value).toBe("#123456");
+  expect(screen.getByLabelText("At 700 (pt)").value).toBe("72");
+  expect(columnNames(container.querySelector("arcgis-feature-table"))).toEqual(["Leaf_Area", "Leaf_Bmass"]);
+  expect(screen.getByLabelText("My configuration").value).toBe("system-default");
+  expect(screen.getByRole("status").textContent).toBe("Default applied");
+  expect(sdk.layers).toHaveLength(1);
+});
+
+test.each(["network", "invalid settings"])("default %s failure keeps editing disabled and can be retried", async failure => {
+  const invalid = defaultConfiguration();
+  invalid.configuration.tableConfig.columns = ["missing_field"];
+  fetch.mockImplementation(async url => {
+    if (!url.endsWith("/default")) return response([]);
+    if (failure === "network") throw new TypeError("offline");
+    return response(invalid);
+  });
+  const { layer } = mountApp();
+  await loadLayer(layer);
+  expect(screen.getByRole("alert").textContent).toContain("Could not load default settings");
+  expect(screen.getByRole("button", { name: "Apply settings" }).disabled).toBe(true);
+  expect(screen.getByRole("button", { name: "Save as configuration" }).disabled).toBe(true);
+  expect(layer.renderer).toBeUndefined();
+  fetch.mockImplementation(async url => response(url.endsWith("/default") ? defaultConfiguration() : []));
+  fireEvent.click(screen.getByRole("button", { name: "Retry default" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Apply settings" }).disabled).toBe(false));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByLabelText("My configuration").value).toBe("system-default");
+});
+
+test("a list failure still allows startup with the system default", async () => {
+  fetch.mockImplementation(async url => {
+    if (url.endsWith("/default")) return response(defaultConfiguration());
+    throw new TypeError("list offline");
+  });
+  const { layer } = mountApp();
+  await loadLayer(layer);
+  expect(screen.getByRole("alert").textContent).toContain("Configuration service unavailable");
+  expect(screen.getByRole("button", { name: "Apply settings" }).disabled).toBe(false);
+  expect(screen.getByLabelText("My configuration").disabled).toBe(false);
+  expect(screen.getByRole("button", { name: "View config" }).disabled).toBe(false);
 });
 
 function failNextTableConfiguration(table) {
@@ -267,9 +343,9 @@ function failNextTableConfiguration(table) {
   });
 }
 
-test("a table apply failure rolls back both parts and leaves the draft retryable", () => {
+test("a table apply failure rolls back both parts and leaves the draft retryable", async () => {
   const { container, layer } = mountApp();
-  loadLayer(layer);
+  await loadLayer(layer);
   const table = container.querySelector("arcgis-feature-table");
   const previous = { renderer: layer.renderer, template: table.tableTemplate, hidden: table.hiddenFields };
   fireEvent.change(screen.getByLabelText("At 700 (pt)"), { target: { value: "75" } });
@@ -288,7 +364,7 @@ test("a table apply failure rolls back both parts and leaves the draft retryable
 
 test("a rendering failure after Save reports persistence success and keeps the draft for Apply", async () => {
   const { container, layer } = mountApp();
-  loadLayer(layer);
+  await loadLayer(layer);
   const table = container.querySelector("arcgis-feature-table");
   const renderer = layer.renderer;
   fireEvent.change(screen.getByLabelText("At 700 (pt)"), { target: { value: "80" } });
@@ -306,7 +382,7 @@ test("a rendering failure after Save reports persistence success and keeps the d
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-test("failed tree loading shows an error and leaves Apply disabled", () => {
+test("failed tree loading shows an error and leaves Apply disabled", async () => {
   const { layer } = mountApp();
   act(() => layer.failed(new Error("offline")));
   expect(screen.getAllByRole("alert")[0].textContent).toContain("Could not load tree data");

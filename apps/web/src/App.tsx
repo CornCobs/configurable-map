@@ -8,7 +8,7 @@ import type { ArcgisMapCustomEvent } from "@arcgis/map-components";
 import type { ArcgisFeatureTable } from "@arcgis/map-components/components/arcgis-feature-table";
 import { Configuration, configure, configureSymbols, configureTable } from "./configuration";
 import { validateSymbology, type SymbologyDraft } from "./symbology";
-import { getConfiguration, listConfigurations, saveConfiguration, type ConfigurationSummary, type SavedConfiguration } from "./configurationApi";
+import { getConfiguration, getDefaultConfiguration, listConfigurations, saveConfiguration, type ConfigurationSummary, type SavedConfiguration } from "./configurationApi";
 import LeftRail from "./components/LeftRail";
 import AttributeSettingsDrawer from "./components/AttributeSettingsDrawer";
 import SaveConfigurationDialog from "./components/SaveConfigurationDialog";
@@ -18,23 +18,7 @@ import Icon from "./components/Icon";
 const FEATURE_LAYER_URL =
   "https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0";
 
-// SAMPLE CONFIG
-const CONFIG: Configuration = {
-  symbolConfig: {
-    color: { field: "Leaf_Area", stops: [{ value: 10, color: "#ffffff" }, { value: 40000, color: "#00fd00" }] },
-    size: { field: "Leaf_Bmass", stops: [{ value: 0, size: 5 }, { value: 700, size: 40 }] }
-  },
-  tableConfig: {
-    columns: ["Leaf_Area", "Leaf_Bmass"]
-  }
-};
-
-const INITIAL_DRAFT: SymbologyDraft = {
-  lowColor: CONFIG.symbolConfig.color!.stops[0].color,
-  highColor: CONFIG.symbolConfig.color!.stops[1].color,
-  lowSize: String(CONFIG.symbolConfig.size!.stops[0].size),
-  highSize: String(CONFIG.symbolConfig.size!.stops[1].size),
-};
+const EMPTY_DRAFT: SymbologyDraft = { lowColor: "", highColor: "", lowSize: "", highSize: "" };
 
 type SettingsDraft = { symbology: SymbologyDraft; columns: string[] };
 
@@ -54,10 +38,13 @@ export default function App() {
   const layerRef = useRef<FeatureLayer | null>(null);
   const initializedTable = useRef<ArcgisFeatureTable | null>(null);
   const [isTableInitialized, setIsTableInitialized] = useState(false);
-  const [symbologyDraft, setSymbologyDraft] = useState(INITIAL_DRAFT);
-  const [appliedSymbologyDraft, setAppliedSymbologyDraft] = useState(INITIAL_DRAFT);
+  const [symbologyDraft, setSymbologyDraft] = useState(EMPTY_DRAFT);
+  const [appliedSymbologyDraft, setAppliedSymbologyDraft] = useState(EMPTY_DRAFT);
   const [appliedColumnNames, setAppliedColumnNames] = useState<string[]>([]);
-  const [savedBaseline, setSavedBaseline] = useState<SettingsDraft>({ symbology: INITIAL_DRAFT, columns: [] });
+  const [savedBaseline, setSavedBaseline] = useState<SettingsDraft>({ symbology: EMPTY_DRAFT, columns: [] });
+  const [defaultConfiguration, setDefaultConfiguration] = useState<SavedConfiguration | null>(null);
+  const [defaultError, setDefaultError] = useState<string | null>(null);
+  const [isLoadingDefault, setIsLoadingDefault] = useState(true);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [layerLoadError, setLayerLoadError] = useState<string | null>(null);
   const [configurations, setConfigurations] = useState<ConfigurationSummary[]>([]);
@@ -82,11 +69,22 @@ export default function App() {
     finally { if (!signal?.aborted) setIsLoadingConfigurations(false); }
   }, []);
 
+  const loadDefaultConfiguration = useCallback(async (signal?: AbortSignal) => {
+    setIsLoadingDefault(true);
+    setDefaultError(null);
+    try {
+      const saved = await getDefaultConfiguration(signal);
+      if (!signal?.aborted) setDefaultConfiguration(saved);
+    } catch (error) { if (!signal?.aborted) setDefaultError((error as Error).message); }
+    finally { if (!signal?.aborted) setIsLoadingDefault(false); }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     void refreshConfigurations(controller.signal);
+    void loadDefaultConfiguration(controller.signal);
     return () => controller.abort();
-  }, [refreshConfigurations]);
+  }, [refreshConfigurations, loadDefaultConfiguration]);
 
   useEffect(() => {
     if (!notification) return;
@@ -95,20 +93,30 @@ export default function App() {
   }, [notification]);
 
   const handleTableRef = useCallback((table: ArcgisFeatureTable | null) => {
-    if (!table || !layer) {
-      setIsTableInitialized(false);
-      return;
-    }
+    if (!table || !layer || !defaultConfiguration) return;
     if (initializedTable.current !== table) {
-      // Initialize once; saved configurations update this same layer and table without resetting the viewport.
-      configure(layer, table, {
-        ...CONFIG,
-        tableConfig: { columns: layer.fields.map(field => field.name) },
-      });
-      initializedTable.current = table;
+      const previous = { renderer: layer.renderer, tableTemplate: table.tableTemplate, hiddenFields: table.hiddenFields };
+      try {
+        const draft = draftFromConfiguration(defaultConfiguration.configuration);
+        validateDraft(draft);
+        configure(layer, table, defaultConfiguration.configuration);
+        setSymbologyDraft(draft.symbology);
+        setAppliedSymbologyDraft(draft.symbology);
+        setDraftColumnNames(draft.columns);
+        setAppliedColumnNames(draft.columns);
+        setSavedBaseline(draft);
+        setSelectedConfigurationId(defaultConfiguration.id);
+        initializedTable.current = table;
+      } catch (error) {
+        layer.renderer = previous.renderer;
+        table.tableTemplate = previous.tableTemplate;
+        table.hiddenFields = previous.hiddenFields;
+        setDefaultError((error as Error).message);
+        return;
+      }
     }
     setIsTableInitialized(true);
-  }, [layer]);
+  }, [layer, defaultConfiguration]);
 
   const validateDraft = (draft: SettingsDraft): Configuration => {
     const result = validateSymbology(draft.symbology);
@@ -185,7 +193,8 @@ export default function App() {
     setIsOpeningConfiguration(true);
     setConfigurationError(null);
     try {
-      const saved = await getConfiguration(id);
+      // Future: Resolve the owner's personal default on the backend when preferences are introduced.
+      const saved = id === defaultConfiguration?.id ? await getDefaultConfiguration() : await getConfiguration(id);
       const nextDraft = draftFromConfiguration(saved.configuration);
       validateDraft(nextDraft);
       applySettingsSnapshot(saved.configuration, nextDraft);
@@ -194,7 +203,6 @@ export default function App() {
       setSavedBaseline(nextDraft);
       setSelectedConfigurationId(saved.id);
       setSettingsError(null);
-      setNotification({ message: `Configuration “${saved.name}” loaded successfully.` });
     } catch (error) { setConfigurationError((error as Error).message); }
     finally { setIsOpeningConfiguration(false); }
   };
@@ -229,10 +237,6 @@ export default function App() {
     layer.when(
       () => {
         if (layer.fullExtent) view.goTo(layer.fullExtent).catch(() => { });
-        const initialColumns = layer.fields.map(field => field.name);
-        setDraftColumnNames(initialColumns);
-        setAppliedColumnNames(initialColumns);
-        setSavedBaseline({ symbology: INITIAL_DRAFT, columns: initialColumns });
         setLayer(layer);
       },
       () => setLayerLoadError("Could not load tree data. Check your connection and reload the page."),
@@ -256,7 +260,7 @@ export default function App() {
         symbologyDraft={symbologyDraft}
         onSymbologyChange={updateSymbologyDraft}
         error={settingsError}
-        status={hasUnappliedChanges ? "Changes not applied" : hasUnsavedChanges ? "Applied — not saved" : selectedConfigurationId ? "Saved configuration applied" : "Default applied"}
+        status={hasUnappliedChanges ? "Changes not applied" : hasUnsavedChanges ? "Applied — not saved" : selectedConfigurationId === defaultConfiguration?.id ? "Default applied" : "Saved configuration applied"}
         onApply={applySettings}
         onSave={openSaveDialog}
         isBusy={isOpeningConfiguration || isSaving}
@@ -273,11 +277,13 @@ export default function App() {
           {/* Future: Style the native select chevron with an approved icon while preserving native keyboard behaviour. */}
           <label>My configuration<select value={selectedConfigurationId} disabled={!isTableInitialized || isLoadingConfigurations || isOpeningConfiguration || isSaving} onChange={event => void openSavedConfiguration(event.target.value)}>
             <option value="">{isLoadingConfigurations ? "Loading configurations…" : "Choose a configuration"}</option>
-            {configurations.map(configuration => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}
+            {defaultConfiguration && <option value={defaultConfiguration.id}>{defaultConfiguration.name}</option>}
+            {configurations.filter(configuration => configuration.id !== defaultConfiguration?.id).map(configuration => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}
           </select></label>
           <button type="button" disabled={!selectedConfigurationId || !isTableInitialized || isOpeningConfiguration || isSaving} onClick={() => void openSavedConfiguration(selectedConfigurationId)}>View config</button>
           {isOpeningConfiguration && <span>Opening…</span>}
           {configurationError && <><span role="alert">{configurationError}</span><button type="button" disabled={isLoadingConfigurations} onClick={() => void refreshConfigurations()}>Retry list</button></>}
+          {defaultError && <><span role="alert">Could not load default settings: {defaultError}</span><button type="button" disabled={isLoadingDefault} onClick={() => void loadDefaultConfiguration()}>Retry default</button></>}
           {layerLoadError && <span role="alert">{layerLoadError}</span>}
         </div>
         <arcgis-map

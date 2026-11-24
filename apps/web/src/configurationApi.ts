@@ -21,6 +21,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const listConfigurations = (signal?: AbortSignal) => request<ConfigurationSummary[]>("", { signal });
+export const getDefaultConfiguration = (signal?: AbortSignal) => request<SavedConfiguration>("/default", { signal });
 export const getConfiguration = (id: string) => request<SavedConfiguration>(`/${encodeURIComponent(id)}`);
 export const saveConfiguration = (name: string, configuration: Configuration) => request<SavedConfiguration>("", {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, configuration }),
