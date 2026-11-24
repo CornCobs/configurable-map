@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer";
 import "@arcgis/map-components/components/arcgis-map";
 import "@arcgis/map-components/components/arcgis-legend";
@@ -7,9 +7,12 @@ import "@arcgis/map-components/components/arcgis-expand";
 import type { ArcgisMapCustomEvent } from "@arcgis/map-components";
 import type { ArcgisFeatureTable } from "@arcgis/map-components/components/arcgis-feature-table";
 import { Configuration, configure, configureSymbols, configureTable } from "./configuration";
-import { applySymbologyDraft, MAX_MARKER_SIZE, MIN_MARKER_SIZE, type SymbologyDraft } from "./symbology";
+import { validateSymbology, type SymbologyDraft } from "./symbology";
+import { getConfiguration, listConfigurations, saveConfiguration, type ConfigurationSummary, type SavedConfiguration } from "./configurationApi";
 import LeftRail from "./components/LeftRail";
 import AttributeSettingsDrawer from "./components/AttributeSettingsDrawer";
+import SaveConfigurationDialog from "./components/SaveConfigurationDialog";
+import Icon from "./components/Icon";
 
 // This is a REST API - you can open this url on the browser to see the available fields in the layer
 const FEATURE_LAYER_URL =
@@ -18,8 +21,8 @@ const FEATURE_LAYER_URL =
 // SAMPLE CONFIG
 const CONFIG: Configuration = {
   symbolConfig: {
-    color: { field: "Leaf_Area", stops: [{value: 10, color: "#ffffff"}, {value: 40000, color: "#00fd00"}]},
-    size: { field: "Leaf_Bmass", stops: [{value: 0, size: 5}, {value: 700, size: 40}]}
+    color: { field: "Leaf_Area", stops: [{ value: 10, color: "#ffffff" }, { value: 40000, color: "#00fd00" }] },
+    size: { field: "Leaf_Bmass", stops: [{ value: 0, size: 5 }, { value: 700, size: 40 }] }
   },
   tableConfig: {
     columns: ["Leaf_Area", "Leaf_Bmass"]
@@ -33,6 +36,17 @@ const INITIAL_DRAFT: SymbologyDraft = {
   highSize: String(CONFIG.symbolConfig.size!.stops[1].size),
 };
 
+type SettingsDraft = { symbology: SymbologyDraft; columns: string[] };
+
+function draftFromConfiguration(configuration: Configuration): SettingsDraft {
+  const { color, size } = configuration.symbolConfig;
+  if (color?.field !== "Leaf_Area" || size?.field !== "Leaf_Bmass" || color.stops.length !== 2 || size.stops.length !== 2 ||
+    color.stops[0].value !== 10 || color.stops[1].value !== 40000 || size.stops[0].value !== 0 || size.stops[1].value !== 700) {
+    throw new Error("This configuration uses fields or ranges this editor does not support.");
+  }
+  return { symbology: { lowColor: color.stops[0].color, highColor: color.stops[1].color, lowSize: String(size.stops[0].size), highSize: String(size.stops[1].size) }, columns: [...configuration.tableConfig.columns] };
+}
+
 export default function App() {
   const [isAttributeDrawerOpen, setIsAttributeDrawerOpen] = useState(false);
   const [draftColumnNames, setDraftColumnNames] = useState<string[]>([]);
@@ -42,11 +56,43 @@ export default function App() {
   const [isTableInitialized, setIsTableInitialized] = useState(false);
   const [symbologyDraft, setSymbologyDraft] = useState(INITIAL_DRAFT);
   const [appliedSymbologyDraft, setAppliedSymbologyDraft] = useState(INITIAL_DRAFT);
-  const [hasAppliedSymbology, setHasAppliedSymbology] = useState(false);
-  const [symbologyError, setSymbologyError] = useState<string | null>(null);
+  const [appliedColumnNames, setAppliedColumnNames] = useState<string[]>([]);
+  const [savedBaseline, setSavedBaseline] = useState<SettingsDraft>({ symbology: INITIAL_DRAFT, columns: [] });
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [layerLoadError, setLayerLoadError] = useState<string | null>(null);
-  const hasSymbologyChanges = (Object.keys(symbologyDraft) as (keyof SymbologyDraft)[])
-    .some(key => symbologyDraft[key] !== appliedSymbologyDraft[key]);
+  const [configurations, setConfigurations] = useState<ConfigurationSummary[]>([]);
+  const [selectedConfigurationId, setSelectedConfigurationId] = useState("");
+  const [configurationError, setConfigurationError] = useState<string | null>(null);
+  const [isLoadingConfigurations, setIsLoadingConfigurations] = useState(true);
+  const [isOpeningConfiguration, setIsOpeningConfiguration] = useState(false);
+  const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [notification, setNotification] = useState<{ message: string } | null>(null);
+  const settingsButton = useRef<HTMLButtonElement | null>(null);
+  const currentDraft = { symbology: symbologyDraft, columns: draftColumnNames };
+  const hasUnappliedChanges = JSON.stringify(currentDraft) !== JSON.stringify({ symbology: appliedSymbologyDraft, columns: appliedColumnNames });
+  const hasUnsavedChanges = JSON.stringify(currentDraft) !== JSON.stringify(savedBaseline);
+
+  const refreshConfigurations = useCallback(async (signal?: AbortSignal) => {
+    setIsLoadingConfigurations(true);
+    setConfigurationError(null);
+    try { setConfigurations(await listConfigurations(signal)); }
+    catch (error) { if (!signal?.aborted) setConfigurationError((error as Error).message); }
+    finally { if (!signal?.aborted) setIsLoadingConfigurations(false); }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void refreshConfigurations(controller.signal);
+    return () => controller.abort();
+  }, [refreshConfigurations]);
+
+  useEffect(() => {
+    if (!notification) return;
+    const timer = window.setTimeout(() => setNotification(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notification]);
 
   const handleTableRef = useCallback((table: ArcgisFeatureTable | null) => {
     if (!table || !layer) {
@@ -54,7 +100,7 @@ export default function App() {
       return;
     }
     if (initializedTable.current !== table) {
-      // Initially show all columns. Applying table settings later leaves map symbology unchanged.
+      // Initialize once; saved configurations update this same layer and table without resetting the viewport.
       configure(layer, table, {
         ...CONFIG,
         tableConfig: { columns: layer.fields.map(field => field.name) },
@@ -64,27 +110,93 @@ export default function App() {
     setIsTableInitialized(true);
   }, [layer]);
 
-  const applyTableSettings = () => {
-    if (!isTableInitialized || !layer || !initializedTable.current || draftColumnNames.length === 0) return;
-    configureTable(layer, initializedTable.current, { columns: draftColumnNames });
-    setIsAttributeDrawerOpen(false);
+  const validateDraft = (draft: SettingsDraft): Configuration => {
+    const result = validateSymbology(draft.symbology);
+    if (result.error) throw new Error(result.error);
+    if (draft.columns.length === 0) throw new Error("Select at least one column.");
+    if (!layer || draft.columns.some(name => !layer.fields.some(field => field.name === name))) throw new Error("This configuration contains unavailable columns.");
+    return { symbolConfig: result.symbolConfig!, tableConfig: { columns: [...draft.columns] } };
   };
 
   const updateSymbologyDraft = (field: keyof SymbologyDraft, value: string) => {
     setSymbologyDraft(current => ({ ...current, [field]: value }));
-    setSymbologyError(null);
   };
 
-  // Future: Save should persist a validated Configuration through the API;
-  // keep Apply as a map-only operation so editing never overwrites a saved record.
-  const applySymbology = () => {
-    if (!isTableInitialized || !layer) return;
-    const result = applySymbologyDraft(symbologyDraft, appliedSymbologyDraft, symbols => configureSymbols(layer, symbols));
-    setSymbologyError(result.error);
-    if (!result.error) {
-      setAppliedSymbologyDraft(result.appliedDraft);
-      setHasAppliedSymbology(true);
+  const applySettingsSnapshot = (configuration: Configuration, draft: SettingsDraft, changesOnly = false) => {
+    if (!isTableInitialized || !layer || !initializedTable.current) throw new Error("The table is still loading. Try again when it is ready.");
+    const table = initializedTable.current;
+    const previous = { renderer: layer.renderer, tableTemplate: table.tableTemplate, hiddenFields: table.hiddenFields };
+    try {
+      if (!changesOnly || JSON.stringify(draft.symbology) !== JSON.stringify(appliedSymbologyDraft)) configureSymbols(layer, configuration.symbolConfig);
+      if (!changesOnly || JSON.stringify(draft.columns) !== JSON.stringify(appliedColumnNames)) configureTable(layer, table, configuration.tableConfig);
     }
+    catch {
+      layer.renderer = previous.renderer;
+      table.tableTemplate = previous.tableTemplate;
+      table.hiddenFields = previous.hiddenFields;
+      throw new Error("Could not apply settings. Your previous map and table settings are kept; try again.");
+    }
+    setAppliedSymbologyDraft({ ...draft.symbology });
+    setAppliedColumnNames([...draft.columns]);
+  };
+
+  const applySettings = () => {
+    try {
+      applySettingsSnapshot(validateDraft(currentDraft), currentDraft, true);
+      setSettingsError(null);
+    } catch (error) { setSettingsError((error as Error).message); }
+  };
+
+  const openSaveDialog = () => {
+    try {
+      validateDraft(currentDraft);
+      setSettingsError(null);
+      setSaveError(null);
+      setIsSaveDialogOpen(true);
+    } catch (error) { setSettingsError((error as Error).message); }
+  };
+
+  const saveCurrentDraft = async (name: string) => {
+    // Future: Save a shared configuration as a new owned copy after sharing is introduced.
+    setIsSaving(true);
+    setSaveError(null);
+    let saved: SavedConfiguration;
+    const snapshot = { symbology: { ...symbologyDraft }, columns: [...draftColumnNames] };
+    try { saved = await saveConfiguration(name, validateDraft(snapshot)); }
+    catch (error) { setSaveError((error as Error).message); setIsSaving(false); return; }
+    setConfigurations(current => [...current, saved]);
+    setSelectedConfigurationId(saved.id);
+    setSavedBaseline(snapshot);
+    setIsSaving(false);
+    setIsSaveDialogOpen(false);
+    setNotification({ message: `Configuration “${saved.name}” created successfully.` });
+    try {
+      applySettingsSnapshot(saved.configuration, snapshot);
+      setSettingsError(null);
+      setIsAttributeDrawerOpen(false);
+      window.requestAnimationFrame(() => settingsButton.current?.focus());
+    } catch {
+      setSettingsError("Configuration saved, but could not apply it. Your draft is kept; try Apply settings again.");
+    }
+  };
+
+  const openSavedConfiguration = async (id: string) => {
+    if (!id || (hasUnsavedChanges && !window.confirm("Discard your unsaved settings and open this configuration?"))) return;
+    setIsOpeningConfiguration(true);
+    setConfigurationError(null);
+    try {
+      const saved = await getConfiguration(id);
+      const nextDraft = draftFromConfiguration(saved.configuration);
+      validateDraft(nextDraft);
+      applySettingsSnapshot(saved.configuration, nextDraft);
+      setSymbologyDraft(nextDraft.symbology);
+      setDraftColumnNames(nextDraft.columns);
+      setSavedBaseline(nextDraft);
+      setSelectedConfigurationId(saved.id);
+      setSettingsError(null);
+      setNotification({ message: `Configuration “${saved.name}” loaded successfully.` });
+    } catch (error) { setConfigurationError((error as Error).message); }
+    finally { setIsOpeningConfiguration(false); }
   };
 
   const handleMapReady = useCallback((event: ArcgisMapCustomEvent<void>) => {
@@ -116,8 +228,11 @@ export default function App() {
     view.map.add(layer);
     layer.when(
       () => {
-        if (layer.fullExtent) view.goTo(layer.fullExtent).catch(() => {});
-        setDraftColumnNames(layer.fields.map(field => field.name));
+        if (layer.fullExtent) view.goTo(layer.fullExtent).catch(() => { });
+        const initialColumns = layer.fields.map(field => field.name);
+        setDraftColumnNames(initialColumns);
+        setAppliedColumnNames(initialColumns);
+        setSavedBaseline({ symbology: INITIAL_DRAFT, columns: initialColumns });
         setLayer(layer);
       },
       () => setLayerLoadError("Could not load tree data. Check your connection and reload the page."),
@@ -129,6 +244,7 @@ export default function App() {
       <LeftRail
         isAttributeDrawerOpen={isAttributeDrawerOpen}
         onToggleAttributeDrawer={() => setIsAttributeDrawerOpen(selected => !selected)}
+        buttonRef={settingsButton}
       />
       <AttributeSettingsDrawer
         isAttributeDrawerOpen={isAttributeDrawerOpen}
@@ -137,47 +253,52 @@ export default function App() {
         isTableInitialized={isTableInitialized}
         layerLoadError={layerLoadError}
         onChange={setDraftColumnNames}
-        onApply={applyTableSettings}
+        symbologyDraft={symbologyDraft}
+        onSymbologyChange={updateSymbologyDraft}
+        error={settingsError}
+        status={hasUnappliedChanges ? "Changes not applied" : hasUnsavedChanges ? "Applied — not saved" : selectedConfigurationId ? "Saved configuration applied" : "Default applied"}
+        onApply={applySettings}
+        onSave={openSaveDialog}
+        isBusy={isOpeningConfiguration || isSaving}
+        canSave={!isLoadingConfigurations}
       />
+      {isSaveDialogOpen && <SaveConfigurationDialog isSaving={isSaving} error={saveError} onSave={name => void saveCurrentDraft(name)} onCancel={() => setIsSaveDialogOpen(false)} />}
+      {notification && <div className="configuration-toast">
+        <span className="configuration-toast-icon"><Icon name="check-circle-f" /></span>
+        <div role="status"><strong>Success</strong><p>{notification.message}</p></div>
+        <button type="button" aria-label="Dismiss notification" onClick={() => setNotification(null)}><Icon name="x" /></button>
+      </div>}
       <div className="map-workspace">
-      <form className="symbology-panel" noValidate onSubmit={event => { event.preventDefault(); applySymbology(); }}>
-        <fieldset>
-          <legend>Point colour · Leaf area</legend>
-          <label>At 10 <input type="color" value={symbologyDraft.lowColor} onChange={event => updateSymbologyDraft("lowColor", event.target.value)} /></label>
-          <label>At 40,000 <input type="color" value={symbologyDraft.highColor} onChange={event => updateSymbologyDraft("highColor", event.target.value)} /></label>
-        </fieldset>
-        <fieldset>
-          <legend>Point size · Leaf biomass</legend>
-          <label>At 0 (pt) <input type="number" min={MIN_MARKER_SIZE} max={MAX_MARKER_SIZE} step="any" value={symbologyDraft.lowSize} onChange={event => updateSymbologyDraft("lowSize", event.target.value)} /></label>
-          <label>At 700 (pt) <input type="number" min={MIN_MARKER_SIZE} max={MAX_MARKER_SIZE} step="any" value={symbologyDraft.highSize} onChange={event => updateSymbologyDraft("highSize", event.target.value)} /></label>
-          <small>1–100 points; either direction allowed.</small>
-        </fieldset>
-        <div className="symbology-actions">
-          <button type="submit" disabled={!isTableInitialized}>Apply</button>
-          <span role="status">{layerLoadError ? "Map unavailable" : !isTableInitialized ? "Loading map…" : hasSymbologyChanges ? "Changes not applied" : hasAppliedSymbology ? "Applied — not saved" : "Default applied"}</span>
+        <div className="configuration-toolbar">
+          {/* Future: Style the native select chevron with an approved icon while preserving native keyboard behaviour. */}
+          <label>My configuration<select value={selectedConfigurationId} disabled={!isTableInitialized || isLoadingConfigurations || isOpeningConfiguration || isSaving} onChange={event => void openSavedConfiguration(event.target.value)}>
+            <option value="">{isLoadingConfigurations ? "Loading configurations…" : "Choose a configuration"}</option>
+            {configurations.map(configuration => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}
+          </select></label>
+          <button type="button" disabled={!selectedConfigurationId || !isTableInitialized || isOpeningConfiguration || isSaving} onClick={() => void openSavedConfiguration(selectedConfigurationId)}>View config</button>
+          {isOpeningConfiguration && <span>Opening…</span>}
+          {configurationError && <><span role="alert">{configurationError}</span><button type="button" disabled={isLoadingConfigurations} onClick={() => void refreshConfigurations()}>Retry list</button></>}
           {layerLoadError && <span role="alert">{layerLoadError}</span>}
-          {symbologyError && <span role="alert">{symbologyError}</span>}
         </div>
-      </form>
-      <arcgis-map
-        id="map"
-        basemap="topo-vector"
-        onarcgisViewReadyChange={handleMapReady}
-        style={{ flex: 1, minHeight: 0 }}
-      >
-        {/* Keep the legend in workspace stacking rather than the browser's top layer. */}
-        <arcgis-expand slot="bottom-left" expanded topLayerDisabled>
-          <arcgis-legend />
-        </arcgis-expand>
-      </arcgis-map>
-      {layer && (
-        <arcgis-feature-table
-          ref={handleTableRef}
-          referenceElement="map"
-          layer={layer}
-          style={{ height: "40vh" }}
-        />
-      )}
+        <arcgis-map
+          id="map"
+          basemap="topo-vector"
+          onarcgisViewReadyChange={handleMapReady}
+          style={{ flex: 1, minHeight: 0 }}
+        >
+          {/* Keep the legend in workspace stacking rather than the browser's top layer. */}
+          <arcgis-expand slot="bottom-left" expanded topLayerDisabled>
+            <arcgis-legend />
+          </arcgis-expand>
+        </arcgis-map>
+        {layer && (
+          <arcgis-feature-table
+            ref={handleTableRef}
+            referenceElement="map"
+            layer={layer}
+            style={{ height: "40vh" }}
+          />
+        )}
       </div>
     </div>
   );

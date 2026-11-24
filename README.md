@@ -4,7 +4,10 @@
 
 A React map of the [Landscape Trees dataset](https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0). Users edit point colour and size, then select **Apply**. Invalid edits show an error and leave the previous settings applied. Apply is disabled while tree data loads; load failures show an error.
 
-The table starts with all dataset fields. Open **Table** in the left rail to edit compact column chips. Click a selected name to hide it; search hidden columns and click to add. Drag a grip to reorder, or focus it and press Alt + Left/Right. **Apply table settings** updates the table and closes the drawer. Closing through **Table** keeps the draft without applying it; at least one column must remain selected.
+The table starts with all dataset fields. Open **Settings** in the left rail to edit symbology and column chips. Click a selected name to hide it; search hidden columns and click to add. Drag a grip to reorder, or focus it and press Alt + Left/Right. **Apply settings** updates only the changed parts and keeps the drawer open; symbology-only edits preserve the table layout. Closing through the rail keeps unapplied drafts. At least one column must remain selected.
+
+**Save as configuration** validates the current draft without requiring Apply, asks for a name, then saves and applies it. Select a saved configuration above the map to apply it; **View config** reloads the selected settings. Duplicate names (ignoring case and surrounding spaces) show an inline error. Save/open confirmations appear briefly at the top right; errors remain visible for correction.
+
 
 ## Architecture explanation
 
@@ -43,7 +46,7 @@ From `apps/web`: `pnpm test` runs frontend tests; `pnpm run build` builds the ap
 
 Tree data comes from the [ArcGIS feature service](https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Landscape_Trees/FeatureServer/0).
 
-Future: Link the application backend API documentation when implemented.
+With the backend running, open [FastAPI docs](http://127.0.0.1:8000/api/docs). `POST /api/configurations` creates a named configuration; `GET /api/configurations` lists saved records; `GET /api/configurations/{id}` reopens one. Invalid payloads return `422`, duplicate names `409`, and missing/inaccessible records `404`.
 
 ## Assumptions and trade-offs
 
@@ -53,13 +56,13 @@ Future: Link the application backend API documentation when implemented.
 
 ## Known limitations
 
-Apply does not save; reload restores the initial settings. Symbology field selection, saved custom configurations and sharing are not implemented. The desktop drawer overlays part of the workspace while open.
+**Apply settings** updates the map and table without saving to the database. Saved configurations remain available after refreshing the page or restarting the backend; select one from the dropdown to load it again. Loading a default configuration from the backend at startup and sharing configurations are not implemented yet. The fields and data ranges used for point colour and size cannot be changed. The open settings drawer covers part of the map and table.
 
-Not verified: live-map acceptance and responsive/accessibility checks.
+Browser checks confirmed that users can save edits without clicking Apply first, receive an error for duplicate names, and load saved configurations after refreshing. Automated App tests check that symbology and column changes apply independently, configurations can be saved and loaded, and errors preserve settings for retry. These tests simulate ArcGIS and do not check how the real map renders. Final manual acceptance, mobile layout and accessibility checks are still pending.
 
 ## Further improvements
 
-Future: Dock the drawer so the map/table workspace narrows and the uncovered table remains horizontally scrollable. Adapt the layout for mobile and replace drawer icon glyphs with Font Awesome or an approved icon set while preserving accessible labels.
+Future: Dock the drawer so the map/table workspace narrows and the uncovered table remains horizontally scrollable. Adapt the layout for mobile and replace drawer icon glyphs with Font Awesome, Calcite icon set or an approved icon set while preserving accessible labels.
 
 Future: Support metadata-driven field selection, editable data ranges and final UI polish. Complete required configuration and sharing workflows before optional extensions.
 
