@@ -330,7 +330,6 @@ test("a list failure still allows startup with the system default", async () => 
   expect(screen.getByRole("alert").textContent).toContain("Configuration service unavailable");
   expect(screen.getByRole("button", { name: "Apply settings" }).disabled).toBe(false);
   expect(screen.getByLabelText("My configuration").disabled).toBe(false);
-  expect(screen.getByRole("button", { name: "View config" }).disabled).toBe(false);
 });
 
 function failNextTableConfiguration(table) {

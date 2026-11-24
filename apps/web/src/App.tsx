@@ -280,7 +280,6 @@ export default function App() {
             {defaultConfiguration && <option value={defaultConfiguration.id}>{defaultConfiguration.name}</option>}
             {configurations.filter(configuration => configuration.id !== defaultConfiguration?.id).map(configuration => <option key={configuration.id} value={configuration.id}>{configuration.name}</option>)}
           </select></label>
-          <button type="button" disabled={!selectedConfigurationId || !isTableInitialized || isOpeningConfiguration || isSaving} onClick={() => void openSavedConfiguration(selectedConfigurationId)}>View config</button>
           {isOpeningConfiguration && <span>Opening…</span>}
           {configurationError && <><span role="alert">{configurationError}</span><button type="button" disabled={isLoadingConfigurations} onClick={() => void refreshConfigurations()}>Retry list</button></>}
           {defaultError && <><span role="alert">Could not load default settings: {defaultError}</span><button type="button" disabled={isLoadingDefault} onClick={() => void loadDefaultConfiguration()}>Retry default</button></>}
