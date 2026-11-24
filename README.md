@@ -10,7 +10,7 @@ The table starts with all dataset fields. Open **Table** in the left rail to edi
 
 The React/TypeScript frontend is in `apps/web`. ArcGIS components display the map, legend and table using hosted tree data. `App.tsx` holds draft/applied state, `symbology.ts` validates symbols, and `configuration.ts` updates the renderer and table separately. Components under `src/components` provide the left rail and attribute drawer.
 
-The Python/FastAPI backend in `apps/api` currently provides a health endpoint and generated API documentation. Future: Add configuration storage and connect the frontend to the API.
+The Python/FastAPI backend stores combined configuration snapshots in SQLite at `apps/api/data/configurations.db`, created on startup and excluded from Git. Vite proxies `/api` requests to the backend. All browsers currently use one fixed demo owner; login is future work.
 
 ## Local setup instructions
 
