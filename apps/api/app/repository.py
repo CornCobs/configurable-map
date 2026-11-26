@@ -60,12 +60,12 @@ class ConfigurationRepository:
             if owner["owner_id"] != SYSTEM_OWNER_ID:
                 raise ValueError("The predefined default ID belongs to another owner.")
             # Future: Move demo fixtures into explicit demo-account setup when login is added.
-            for configuration_id, draft in DEMO_SHARED_CONFIGURATIONS:
+            for configuration_id, share_token, draft in DEMO_SHARED_CONFIGURATIONS:
                 connection.execute(
                     """INSERT INTO configurations
                     (id, name, owner_id, visibility, share_token, settings_json, created_at)
                     VALUES (?, ?, ?, 'unlisted', ?, ?, ?) ON CONFLICT(id) DO NOTHING""",
-                    (configuration_id, draft.name, DEMO_SHARE_OWNER_ID, secrets.token_urlsafe(32),
+                    (configuration_id, draft.name, DEMO_SHARE_OWNER_ID, share_token,
                     draft.configuration.model_dump_json(), datetime.now(timezone.utc).isoformat()),
                 )
 

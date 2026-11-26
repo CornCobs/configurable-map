@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -37,7 +38,18 @@ class ConfigurationTests(unittest.TestCase):
                 "SELECT * FROM configurations WHERE owner_id = ? ORDER BY id", (DEMO_SHARE_OWNER_ID,),
             )]
         self.assertEqual(len(rows), 2)
-        expected = dict(DEMO_SHARED_CONFIGURATIONS)
+        expected = {configuration_id: draft for configuration_id, _, draft in DEMO_SHARED_CONFIGURATIONS}
+        expected_tokens = {
+            "b69f75a7-73f6-4ee6-b774-545c0a21d4bb": "RfYTCzDAO0YBTDuFBjuG7rUmpzMaSWY3hHlaAQbtx4c",
+            "21383eb7-2f20-4e65-a67f-e99b87a683fe": "YRJH15Pu9ye3ik4q736OzqziDVa6GKLMfxfH13rePR4",
+        }
+        self.assertEqual({row["id"]: row["share_token"] for row in rows}, expected_tokens)
+        with TestClient(create_app(self.database_path.with_name("independent.db"))) as independent:
+            for configuration_id, token in expected_tokens.items():
+                response = independent.get(f"/api/configurations/shared/{token}")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["id"], configuration_id)
+                self.assertEqual(response.json()["configuration"], expected[configuration_id].configuration.model_dump())
         self.assertEqual(len({row["share_token"] for row in rows}), 2)
         for row in rows:
             self.assertRegex(row["share_token"], r"^[A-Za-z0-9_-]{43}$")
@@ -50,13 +62,24 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/configurations").json(), [])
         # Preserve existing records, including locally edited demo settings and links.
         with closing(repository.connect()) as connection, connection:
-            connection.execute("UPDATE configurations SET name = ? WHERE id = ?", ("Edited demo", rows[0]["id"]))
+            connection.execute("UPDATE configurations SET name = ?, share_token = ? WHERE id = ?",
+                               ("Edited demo", "existing-demo-link", rows[0]["id"]))
         rows[0]["name"] = "Edited demo"
+        rows[0]["share_token"] = "existing-demo-link"
         repository.initialize()
         with closing(repository.connect()) as connection:
             self.assertEqual([dict(row) for row in connection.execute(
                 "SELECT * FROM configurations WHERE owner_id = ? ORDER BY id", (DEMO_SHARE_OWNER_ID,),
             )], rows)
+        self.assertEqual(self.client.get("/api/configurations/shared/existing-demo-link").json()["name"], "Edited demo")
+
+    def test_normal_share_still_generates_a_secure_random_token(self):
+        saved = self.client.post("/api/configurations", json=draft()).json()
+        with patch("app.repository.secrets.token_urlsafe", return_value="generated-custom-token") as generate_token:
+            response = self.client.post(f"/api/configurations/{saved['id']}/share")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"token": "generated-custom-token"})
+        generate_token.assert_called_once_with(32)
 
     def setUp(self):
         directory = TemporaryDirectory()
